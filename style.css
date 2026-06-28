@@ -194,3 +194,8 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* 角色卡綁定：只有目前角色名稱為「白塔星艦」時顯示面板 */
+#guidelink-dashboard.gld-character-mismatch {
+  display: none !important;
+}
