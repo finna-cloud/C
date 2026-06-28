@@ -2,6 +2,8 @@ import { generateQuietPrompt } from '../../../../script.js';
 
 const MODULE_NAME = 'guidelink-dashboard';
 const STORAGE_KEY = 'guidelink_dashboard_v2';
+const TARGET_CHARACTER_NAME = '白塔星艦';
+let visibilityTimer = null;
 
 const TABS = {
   comm: {
@@ -169,6 +171,10 @@ export function onActivate() {
 }
 
 export function onDisable() {
+  if (visibilityTimer) {
+    clearInterval(visibilityTimer);
+    visibilityTimer = null;
+  }
   root?.remove();
   root = null;
 }
@@ -226,6 +232,10 @@ function buildPanel() {
   makeDraggable(root.querySelector('.gld-header'), root);
   applySavedPosition();
   render();
+  updateCharacterBoundVisibility();
+  if (!visibilityTimer) {
+    visibilityTimer = setInterval(updateCharacterBoundVisibility, 1000);
+  }
 }
 
 function applySavedPosition() {
@@ -303,11 +313,46 @@ async function handleClick(event) {
 }
 
 function renderVisibility() {
+  if (!root) return;
   root.classList.toggle('gld-collapsed', !!state.collapsed);
   root.classList.toggle('gld-hidden', !!state.hidden);
+  updateCharacterBoundVisibility();
+}
+
+function updateCharacterBoundVisibility() {
+  if (!root) return;
+  const isTarget = isCurrentCharacterTarget();
+  root.classList.toggle('gld-character-mismatch', !isTarget);
+  root.dataset.characterBound = isTarget ? '白塔星艦' : 'hidden';
+}
+
+function isCurrentCharacterTarget() {
+  const character = getCurrentCharacter();
+  const name = String(character?.name || '').trim();
+  return name === TARGET_CHARACTER_NAME;
+}
+
+function getCurrentCharacter() {
+  const context = globalThis.SillyTavern?.getContext?.();
+  if (!context) return null;
+
+  const characterId = context.characterId;
+  if (characterId !== undefined && characterId !== null && context.characters?.[characterId]) {
+    return context.characters[characterId];
+  }
+
+  if (context.name2 && Array.isArray(context.characters)) {
+    return context.characters.find(character => character?.name === context.name2) || null;
+  }
+
+  return null;
 }
 
 async function runActiveTool() {
+  if (!isCurrentCharacterTarget()) {
+    setBusy(false);
+    return;
+  }
   const tab = TABS[activeTab];
   setBusy(true, `生成中：${tab.title}…`);
   try {
