@@ -1,0 +1,16 @@
+{
+  "display_name": "GuideLink 儀表板",
+  "loading_order": 99,
+  "dependencies": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "ChatGPT for yu",
+  "version": "2.0.0",
+  "homePage": "",
+  "auto_update": false,
+  "minimum_client_version": "1.12.0",
+  "hooks": {
+    "activate": "onActivate",
+    "disable": "onDisable"
+  }
+}
