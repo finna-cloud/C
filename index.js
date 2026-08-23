@@ -1354,19 +1354,17 @@ function openCharacterOverview(index = characterCarouselIndex, flipped = false) 
             '<div class="mol-character-carousel" data-character-index="' + id + '">',
             '<div class="mol-carousel-count"><span>FRAME ' + String(id + 1).padStart(2, '0') + '</span><strong>' + (id + 1) + ' / ' + characters.length + '</strong></div>',
             '<div class="mol-frame-stage">',
-            '<button type="button" class="mol-carousel-nav previous" data-action="character-carousel-previous" aria-label="上一張角色卡"' + (characters.length < 2 ? ' disabled' : '') + '><i class="fa-solid fa-chevron-left"></i><span>上一張</span></button>',
             '<article class="mol-character-frame-shell' + (characterCarouselEnterDirection > 0 ? ' is-entering-next' : characterCarouselEnterDirection < 0 ? ' is-entering-previous' : '') + '">',
             '<div class="mol-character-flip' + (characterCarouselFlipped ? ' is-flipped' : '') + '"><div class="mol-character-flip-inner">',
-            '<button type="button" class="mol-character-face mol-character-front" data-action="toggle-character-flip" aria-label="翻面查看 ' + escapeHtml(name) + ' 的角色資訊" aria-hidden="' + (characterCarouselFlipped ? 'true' : 'false') + '" tabindex="' + (characterCarouselFlipped ? '-1' : '0') + '">',
-            '<span class="mol-frame-ornament" aria-hidden="true"></span><span class="mol-character-image-wrap">' + (image || '<span class="mol-character-image-fallback">' + escapeHtml(initials(name)) + '</span>') + '</span>',
-            '<span class="mol-character-nameplate"><strong>' + escapeHtml(name) + '</strong><small>' + escapeHtml(data.personality || character.personality || '角色卡') + '</small></span><span class="mol-flip-hint"><i class="fa-solid fa-rotate"></i> 點擊翻面</span></button>',
+            '<section class="mol-character-face mol-character-front" aria-hidden="' + (characterCarouselFlipped ? 'true' : 'false') + '">',
+            '<span class="mol-frame-ornament" aria-hidden="true"></span><button type="button" class="mol-character-image-wrap" data-action="toggle-character-flip" aria-label="查看 ' + escapeHtml(name) + ' 的角色資訊" tabindex="' + (characterCarouselFlipped ? '-1' : '0') + '">' + (image || '<span class="mol-character-image-fallback">' + escapeHtml(initials(name)) + '</span>') + '</button>',
+            '<span class="mol-character-nameplate"><strong>' + escapeHtml(name) + '</strong><small>' + escapeHtml(data.personality || character.personality || '角色卡') + '</small></span></section>',
             '<section class="mol-character-face mol-character-back" data-action="toggle-character-flip" aria-label="' + escapeHtml(name) + ' 的角色資訊；點擊卡片可翻回角色圖片" aria-hidden="' + (characterCarouselFlipped ? 'false' : 'true') + '"><span class="mol-frame-ornament" aria-hidden="true"></span>',
             '<div class="mol-character-back-heading"><div><p class="mol-eyebrow">CHARACTER CARD</p><h4>' + escapeHtml(name) + '</h4><small class="mol-back-flip-hint"><i class="fa-solid fa-rotate-left"></i> 再點一次卡片返回圖片</small></div><button type="button" data-action="toggle-character-flip" title="翻回圖片"><i class="fa-solid fa-rotate-left"></i></button></div>',
             '<div class="mol-character-back-scroll">' + field('DESCRIPTION', data.description || character.description) + field('PERSONALITY', data.personality || character.personality) + field('SCENARIO', data.scenario) + field('FIRST MESSAGE', data.first_mes || character.first_mes) + '</div>',
             '<div class="mol-character-card-actions"><button data-action="edit-character-card" data-character-id="' + id + '">修改</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="png">匯出 PNG</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="json">匯出 JSON</button><button data-action="delete-character-card" data-character-id="' + id + '" class="danger">刪除</button><button class="primary" data-action="select-overview-character" data-character-id="' + id + '">進入聊天室</button></div>',
             '</section></div></div></article>',
-            '<button type="button" class="mol-carousel-nav next" data-action="character-carousel-next" aria-label="下一張角色卡"' + (characters.length < 2 ? ' disabled' : '') + '><span>下一張</span><i class="fa-solid fa-chevron-right"></i></button>',
-            '</div><div class="mol-carousel-dots" aria-label="角色卡頁面">' + dots + '</div><p class="mol-carousel-help">點擊卡片翻面 · 向右滑下一張 · 向左滑上一張</p></div>',
+            '</div><div class="mol-carousel-dots" aria-label="角色卡頁面">' + dots + '</div></div>',
         ].join('');
     }
     layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-character-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER ARCHIVE</p><h3>角色總覽</h3><div class="mol-panel-toolbar"><button class="primary" data-action="new-character-card"><i class="fa-solid fa-plus"></i> 新增角色</button><button data-action="import-character-card"><i class="fa-solid fa-file-import"></i> 匯入角色卡</button><button data-action="refresh-character-overview"><i class="fa-solid fa-rotate"></i> 重新整理</button></div><input id="mol-character-import" type="file" accept=".json,.png,.yaml,.yml,.charx,.byaf" multiple hidden>' + card + '</div>';
@@ -1428,7 +1426,7 @@ function openCharacterOverview(index = characterCarouselIndex, flipped = false) 
         shell?.style.removeProperty('--mol-card-drag-rotate');
         if (Math.abs(deltaX) < 52 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
         characterSwipeIgnoreUntil = Date.now() + 360;
-        changeCharacterOverview(deltaX > 0 ? 1 : -1);
+        changeCharacterOverview(deltaX > 0 ? -1 : 1);
     };
     const onPointerCancel = (event) => {
         if (pointerId !== event.pointerId) return;
@@ -2244,22 +2242,13 @@ async function handleRootClick(event) {
                 const flip = document.querySelector('#mol-dialog .mol-character-flip');
                 flip?.classList.toggle('is-flipped', characterCarouselFlipped);
                 const front = flip?.querySelector('.mol-character-front');
+                const imageButton = flip?.querySelector('.mol-character-image-wrap');
                 const back = flip?.querySelector('.mol-character-back');
                 front?.setAttribute('aria-hidden', characterCarouselFlipped ? 'true' : 'false');
-                front?.setAttribute('tabindex', characterCarouselFlipped ? '-1' : '0');
+                imageButton?.setAttribute('tabindex', characterCarouselFlipped ? '-1' : '0');
                 back?.setAttribute('aria-hidden', characterCarouselFlipped ? 'false' : 'true');
             }
             break;
-        case 'character-carousel-next': {
-            const count = context.characters?.length || 0;
-            if (count) changeCharacterOverview(1);
-            break;
-        }
-        case 'character-carousel-previous': {
-            const count = context.characters?.length || 0;
-            if (count) changeCharacterOverview(-1);
-            break;
-        }
         case 'character-carousel-go': {
             const targetIndex = Number(actionElement.dataset.characterIndex);
             changeCharacterOverview(targetIndex > characterCarouselIndex ? 1 : -1, targetIndex);

@@ -1506,37 +1506,12 @@ body.mol-gallery-open {
 
 .mol-frame-stage {
     display: grid;
-    grid-template-columns: 92px minmax(260px, 430px) 92px;
+    grid-template-columns: minmax(260px, 430px);
     align-items: center;
     justify-content: center;
-    gap: clamp(12px, 3vw, 34px);
     min-height: 520px;
     touch-action: pan-y;
     user-select: none;
-}
-
-.mol-carousel-nav {
-    display: grid;
-    grid-template-columns: auto auto;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    min-height: 44px;
-    padding: 9px 10px;
-    border: 1px solid var(--mol-line);
-    color: var(--mol-ink);
-    background: var(--mol-paper);
-    font-size: calc(10px * var(--mol-ui-scale));
-}
-
-.mol-carousel-nav:hover:not(:disabled) {
-    border-color: var(--mol-blue);
-    color: var(--mol-blue);
-}
-
-.mol-carousel-nav:disabled {
-    opacity: .32;
-    cursor: default;
 }
 
 .mol-character-frame-shell {
@@ -1640,7 +1615,6 @@ body.mol-gallery-open {
     padding: 18px;
     color: var(--mol-ink);
     text-align: left;
-    cursor: pointer;
     pointer-events: auto;
 }
 
@@ -1651,11 +1625,21 @@ body.mol-gallery-open {
 .mol-character-image-wrap {
     position: relative;
     display: grid;
+    width: 100%;
+    height: 100%;
     min-height: 0;
     overflow: hidden;
+    padding: 0;
     place-items: center;
     border: 0;
+    outline: 0;
     background: #e8e5de;
+    cursor: pointer;
+}
+
+.mol-character-image-wrap:focus-visible {
+    outline: 2px solid var(--mol-blue);
+    outline-offset: 3px;
 }
 
 .mol-character-portrait-image {
@@ -1680,7 +1664,7 @@ body.mol-gallery-open {
 .mol-character-nameplate {
     display: grid;
     gap: 3px;
-    padding: 12px 52px 2px 2px;
+    padding: 12px 2px 2px;
     border-top: 1px solid rgba(41, 39, 34, .18);
 }
 
@@ -1695,17 +1679,6 @@ body.mol-gallery-open {
     font-size: calc(10px * var(--mol-ui-scale));
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.mol-flip-hint {
-    position: absolute;
-    right: 26px;
-    bottom: 25px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--mol-blue);
-    font-size: calc(9px * var(--mol-ui-scale));
 }
 
 .mol-character-back {
@@ -2088,24 +2061,6 @@ body.mol-gallery-open {
         width: min(100%, 390px);
         margin-inline: auto;
     }
-
-    .mol-carousel-nav {
-        position: absolute;
-        z-index: 6;
-        top: 48%;
-        width: 42px;
-        height: 42px;
-        min-height: 42px;
-        padding: 0;
-        border-color: rgba(255, 255, 255, .72);
-        color: white;
-        background: rgba(23, 23, 21, .64);
-        backdrop-filter: blur(5px);
-    }
-
-    .mol-carousel-nav.previous { left: 14px; }
-    .mol-carousel-nav.next { right: 14px; }
-    .mol-carousel-nav span { display: none; }
 
     .mol-character-face {
         border-width: 1px;
