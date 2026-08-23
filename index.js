@@ -66,6 +66,9 @@ let attachmentName = '';
 let activeDialogCleanup = null;
 let manualGenerationPermitUntil = 0;
 let blockedGenerationUntil = 0;
+let groupReplyBatchActive = false;
+let groupDraftOverLimit = false;
+const groupReplyCounts = new Map();
 let chatEntries = [];
 let chatListLoading = false;
 let chatListRequest = 0;
@@ -723,6 +726,9 @@ function disableGroupAutoMode() {
 function enterInspectionMode({ stopActive = false, guardMilliseconds = 8000 } = {}) {
     manualGenerationPermitUntil = 0;
     blockedGenerationUntil = Math.max(blockedGenerationUntil, Date.now() + guardMilliseconds);
+    groupReplyBatchActive = false;
+    groupDraftOverLimit = false;
+    groupReplyCounts.clear();
     isBusy = false;
     disableGroupAutoMode();
     if (stopActive) getContext()?.stopGeneration?.();
@@ -779,7 +785,6 @@ async function fetchChatListForEntry(context, type, entity, id) {
         entity,
         chatId: String(row.file_name || '').replace(/\.jsonl$/i, ''),
         name: entity.name || entity.data?.name || (type === 'group' ? '未命名群組' : '未命名角色'),
-        favorite: type === 'group' ? Boolean(entity.fav) : (entity.fav === true || entity.fav === 'true' || entity.data?.extensions?.fav === true),
         preview: row.preview_message || '尚無預覽',
         messageCount: Number(row.message_count) || 0,
         lastMes: row.last_mes || '',
@@ -862,7 +867,6 @@ function createRoot() {
         '  <label class="mol-search"><i class="fa-solid fa-magnifying-glass"></i><input id="mol-search-input" type="search" placeholder="搜尋聊天室、角色…" aria-label="搜尋聊天室與角色"></label>',
         '  <div class="mol-filters">',
         '    <button data-filter="all" class="active">全部</button>',
-        '    <button data-filter="favorite">收藏</button>',
         '    <button data-filter="group">群組</button>',
         '  </div>',
         '  <div id="mol-entity-list" class="mol-entity-list"></div>',
@@ -891,8 +895,9 @@ function createRoot() {
         '  <div id="mol-art-card" class="mol-art-card"></div>',
         '  <div class="mol-profile-heading"><div><p class="mol-eyebrow">CHARACTER PROFILE</p><h2 id="mol-profile-name">—</h2></div><span id="mol-status" class="mol-status">OFFLINE</span></div>',
         '  <p id="mol-profile-note" class="mol-profile-note">選擇角色後顯示資料。</p>',
-        '  <button class="mol-stat-row" data-action="relationship" title="調整關係值"><span>關係</span><span class="mol-stat-bar"><i id="mol-relationship-bar"></i></span><strong id="mol-relationship">50</strong></button>',
+        '  <div class="mol-stat-row-wrap"><button class="mol-stat-row" data-action="relationship" title="調整關係值"><span>關係</span><span class="mol-stat-bar"><i id="mol-relationship-bar"></i></span><strong id="mol-relationship">50</strong></button><button class="mol-help-button" data-action="relationship-help" title="關係值功能說明" aria-label="關係值功能說明">?</button></div>',
         '  <div class="mol-context-list">',
+        '    <button id="mol-group-members-row" data-action="group-members" hidden><span class="mol-context-icon"><i class="fa-solid fa-user-group"></i></span><span><strong>群組成員</strong><small id="mol-group-members-summary">管理可加入群聊的角色</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="player-profiles"><span class="mol-context-icon"><i class="fa-solid fa-user-pen"></i></span><span><strong>玩家設定檔</strong><small id="mol-player-summary">新增、修改、刪除與切換</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="world-info"><span class="mol-context-icon"><i class="fa-solid fa-book-atlas"></i></span><span><strong>世界書</strong><small id="mol-world-count">在藝廊內查看</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="memory-summary"><span class="mol-context-icon"><i class="fa-solid fa-leaf"></i></span><span><strong>記憶自動摘要</strong><small id="mol-memory-summary">尚未建立摘要</small></span><i class="fa-solid fa-chevron-right"></i></button>',
@@ -1013,7 +1018,7 @@ function setOpen(value) {
 
 function getEntities() {
     return chatEntries
-        .filter((entry) => activeFilter === 'all' || (activeFilter === 'favorite' && entry.favorite) || (activeFilter === 'group' && entry.type === 'group'))
+        .filter((entry) => activeFilter === 'all' || (activeFilter === 'group' && entry.type === 'group'))
         .filter((entry) => !searchQuery || (entry.name + ' ' + entry.chatId + ' ' + entry.preview).toLocaleLowerCase().includes(searchQuery));
 }
 
@@ -1041,7 +1046,7 @@ function renderEntityList() {
         return [
             '<article class="mol-chat-card' + (active ? ' active' : '') + '">',
             '<button class="mol-chat-open" data-chat-type="' + entry.type + '" data-entity-id="' + escapeHtml(entry.entityId) + '" data-chat-id="' + escapeHtml(entry.chatId) + '">',
-            '<span class="mol-avatar">' + avatar + '</span><span class="mol-chat-copy"><span class="mol-chat-line"><strong>' + escapeHtml(entry.name) + '</strong><small>' + (entry.favorite ? '★' : '') + '</small></span>',
+            '<span class="mol-avatar">' + avatar + '</span><span class="mol-chat-copy"><span class="mol-chat-line"><strong>' + escapeHtml(entry.name) + '</strong></span>',
             '<span class="mol-role">' + (entry.type === 'group' ? 'GROUP' : 'CHARACTER') + ' · ' + escapeHtml(entry.chatId) + '</span>',
             '<span class="mol-preview">' + escapeHtml(entry.preview) + '</span></span></button>',
             '<div class="mol-chat-card-actions"><span>' + numberText(entry.messageCount) + ' 則</span><button data-action="export-chat-entry" data-chat-type="' + entry.type + '" data-entity-id="' + escapeHtml(entry.entityId) + '" data-chat-id="' + escapeHtml(entry.chatId) + '" title="匯出 TXT"><i class="fa-solid fa-file-arrow-down"></i></button><button data-action="delete-chat-entry" data-chat-type="' + entry.type + '" data-entity-id="' + escapeHtml(entry.entityId) + '" data-chat-id="' + escapeHtml(entry.chatId) + '" title="刪除聊天室"><i class="fa-solid fa-trash"></i></button></div>',
@@ -1168,7 +1173,6 @@ function renderMessages({ preserveScroll = false } = {}) {
         context.chat.map((message, index) => {
             const side = message.is_user ? ' user' : (message.is_system ? ' system' : ' character');
             const isLastCharacter = index === context.chat.length - 1 && !message.is_user && !message.is_system;
-            const bookmarkActive = Boolean(message.extra?.bookmark_link);
             return [
                 '<article class="mol-message' + side + '" data-message-id="' + index + '">',
                 '<div class="mol-message-meta"><strong>' + escapeHtml(message.name || (message.is_user ? context.name1 : context.name2)) + '</strong><span>#' + index + '</span></div>',
@@ -1176,7 +1180,6 @@ function renderMessages({ preserveScroll = false } = {}) {
                 '<div class="mol-message-tools">',
                 '<button data-action="edit-message" data-message-id="' + index + '">編輯</button>',
                 isLastCharacter ? '<button data-action="regenerate">重試</button>' : '',
-                '<button data-action="bookmark-message" data-message-id="' + index + '">' + (bookmarkActive ? '已收藏' : '收藏') + '</button>',
                 '<button data-action="delete-message" data-message-id="' + index + '">刪除</button>',
                 '</div></article>',
             ].join('');
@@ -1225,6 +1228,12 @@ function renderDetail() {
     const meta = getChatMeta(context);
     document.getElementById('mol-relationship').textContent = String(meta.relationship);
     document.getElementById('mol-relationship-bar').style.width = Math.max(0, Math.min(100, meta.relationship)) + '%';
+    const groupRow = document.getElementById('mol-group-members-row');
+    if (groupRow) groupRow.hidden = entity?.type !== 'group';
+    const groupSummary = document.getElementById('mol-group-members-summary');
+    if (groupSummary) groupSummary.textContent = entity?.type === 'group'
+        ? (entity.item.members?.length || 0) + ' 名角色 · 傳送後依設定主動回覆'
+        : '管理可加入群聊的角色';
     document.getElementById('mol-memory-summary').textContent = meta.memorySummary.content
         ? truncate(meta.memorySummary.content, 28)
         : (meta.memorySummary.enabled ? '已啟用，等待摘要' : '尚未建立摘要');
@@ -1358,6 +1367,85 @@ function openRelationshipDialog() {
     };
     form.addEventListener('submit', handler);
     activeDialogCleanup = () => form.removeEventListener('submit', handler);
+}
+
+function openRelationshipHelpDialog() {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    layer.innerHTML = [
+        '<div class="mol-dialog mol-panel-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">RELATIONSHIP GUIDE</p><h3>關係值功能說明</h3>',
+        '<p class="mol-dialog-copy">關係值用來記錄目前聊天室中角色與玩家的互動進度。數值獨立保存在這個聊天室，不會影響同角色的其他對話，也不會改寫角色卡原始設定。</p>',
+        '<div class="mol-relationship-guide">',
+        '<div><strong>0–19</strong><span>疏離／警戒</span><small>角色仍保持距離，對互動較為防備。</small></div>',
+        '<div><strong>20–39</strong><span>生疏／觀察</span><small>開始認識彼此，但信任尚未建立。</small></div>',
+        '<div><strong>40–59</strong><span>熟悉／普通信任</span><small>能自然交流，願意分享部分資訊。</small></div>',
+        '<div><strong>60–79</strong><span>信任／重視</span><small>關係穩定，角色更重視玩家的反應與選擇。</small></div>',
+        '<div><strong>80–100</strong><span>親密／深度羈絆</span><small>代表高度信任或親密關係；實際表現仍以角色卡設定為準。</small></div>',
+        '</div><p class="mol-dialog-hint">調整數值後會立即儲存；角色回覆仍會綜合角色卡、世界書、後台提示與聊天上下文，不會只依單一數字決定。</p>',
+        '<div class="mol-dialog-actions"><button class="primary" data-action="relationship">調整關係值</button><button data-action="close-dialog">關閉</button></div></div>',
+    ].join('');
+    layer.hidden = false;
+}
+
+async function saveGroupConfiguration(group, patch) {
+    const context = getContext();
+    const next = { ...group, ...patch };
+    next.members = Array.from(new Set((next.members || []).filter(Boolean)));
+    next.disabled_members = (next.disabled_members || []).filter((avatar) => next.members.includes(avatar));
+    const response = await fetch('/api/groups/edit', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify(next),
+    });
+    if (!response.ok) throw new Error('Group update failed: ' + response.status);
+    Object.assign(group, next);
+    const api = await getGroupApi();
+    await api.getGroups?.();
+    refreshAll();
+}
+
+async function openGroupMembersPanel() {
+    closeDialog();
+    const context = getContext();
+    const entity = currentEntity(context);
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    if (!entity || entity.type !== 'group') {
+        notify('請先開啟群組聊天室。', 'warning');
+        return;
+    }
+    const group = entity.item;
+    const memberSet = new Set(group.members || []);
+    const characters = (context.characters || []).filter((character) => character?.avatar).sort((a, b) => {
+        const memberOrder = Number(memberSet.has(b.avatar)) - Number(memberSet.has(a.avatar));
+        return memberOrder || String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant');
+    });
+    const strategyNames = ['自然判斷', '依群組順序', '輪替選擇', '手動指定'];
+    const strategy = Number(group.activation_strategy || 0);
+    const cards = characters.length ? characters.map((character) => {
+        const joined = memberSet.has(character.avatar);
+        const disabled = joined && (group.disabled_members || []).includes(character.avatar);
+        const entityMarkup = { type: 'character', item: character, id: context.characters.indexOf(character) };
+        const avatar = portraitImageMarkup(entityMarkup, context, character.name, '');
+        return [
+            '<article class="mol-group-member-card' + (joined ? ' joined' : '') + '">',
+            '<span class="mol-group-member-avatar">' + (avatar || '<span>' + escapeHtml(initials(character.name)) + '</span>') + '</span>',
+            '<span class="mol-group-member-copy"><strong>' + escapeHtml(character.name || '未命名角色') + '</strong><small>' + escapeHtml(truncate(character.data?.personality || character.description || '角色卡', 70)) + '</small><em>' + (joined ? (disabled ? '已加入 · 後台停用' : '已加入群聊') : '尚未加入') + '</em></span>',
+            joined
+                ? '<button class="danger" data-action="remove-group-member" data-character-avatar="' + escapeHtml(character.avatar) + '">移出</button>'
+                : '<button class="primary" data-action="add-group-member" data-character-avatar="' + escapeHtml(character.avatar) + '">加入群聊</button>',
+            '</article>',
+        ].join('');
+    }).join('') : '<div class="mol-profile-empty"><i class="fa-solid fa-user-slash"></i><strong>目前沒有可加入的角色卡</strong><span>請先建立或匯入角色卡。</span></div>';
+    layer.innerHTML = [
+        '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">GROUP MEMBERS</p><h3>' + escapeHtml(group.name || '群組') + '・群組成員</h3>',
+        '<div class="mol-group-reply-status"><span><strong>角色主動回覆</strong><small>目前策略：' + escapeHtml(strategyNames[strategy] || '後台設定') + '。每次玩家傳送後，角色會讀取自己的角色卡、世界書、後台提示與聊天上下文；每名角色單輪最多回覆 2 次。</small></span>' + (strategy === 3 ? '<button class="primary" data-action="enable-group-auto-replies">啟用自然回覆</button>' : '<em><i class="fa-solid fa-circle-check"></i> 已啟用</em>') + '</div>',
+        '<div class="mol-group-member-list">' + cards + '</div>',
+        '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div></div>',
+    ].join('');
+    layer.hidden = false;
+    wireImageFallbacks(layer);
 }
 
 function openMoreDialog() {
@@ -2765,7 +2853,8 @@ async function handleComposerSubmit(event) {
         context.stopGeneration();
         return;
     }
-    if (!currentEntity(context)) {
+    const entity = currentEntity(context);
+    if (!entity) {
         notify('請先選擇角色或群組。', 'warning');
         return;
     }
@@ -2780,7 +2869,7 @@ async function handleComposerSubmit(event) {
     }
     nativeTextarea.value = text;
     nativeTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-    permitManualGeneration();
+    permitManualGeneration(entity.type === 'group' ? 180000 : 60000);
     draft.value = '';
     attachmentName = '';
     renderComposer();
@@ -3045,6 +3134,59 @@ async function handleRootClick(event) {
             break;
         }
         case 'relationship': openRelationshipDialog(); break;
+        case 'relationship-help': openRelationshipHelpDialog(); break;
+        case 'group-members': await openGroupMembersPanel(); break;
+        case 'add-group-member': {
+            const entity = currentEntity(context);
+            const avatar = actionElement.dataset.characterAvatar || '';
+            if (!entity || entity.type !== 'group' || !avatar) break;
+            try {
+                await saveGroupConfiguration(entity.item, {
+                    members: [...(entity.item.members || []), avatar],
+                    disabled_members: (entity.item.disabled_members || []).filter((item) => item !== avatar),
+                });
+                notify('角色已加入「' + (entity.item.name || '群組') + '」。');
+                await openGroupMembersPanel();
+            } catch (error) {
+                console.error('[墨藍藝廊] 加入群組角色失敗', error);
+                notify('角色加入群聊失敗，請重新整理後重試。', 'error');
+            }
+            break;
+        }
+        case 'remove-group-member': {
+            const entity = currentEntity(context);
+            const avatar = actionElement.dataset.characterAvatar || '';
+            if (!entity || entity.type !== 'group' || !avatar) break;
+            if ((entity.item.members || []).length <= 1) {
+                notify('群組至少需要保留一名角色。', 'warning');
+                break;
+            }
+            try {
+                await saveGroupConfiguration(entity.item, {
+                    members: (entity.item.members || []).filter((item) => item !== avatar),
+                    disabled_members: (entity.item.disabled_members || []).filter((item) => item !== avatar),
+                });
+                notify('角色已移出目前群聊。');
+                await openGroupMembersPanel();
+            } catch (error) {
+                console.error('[墨藍藝廊] 移出群組角色失敗', error);
+                notify('角色移出群聊失敗，請重新整理後重試。', 'error');
+            }
+            break;
+        }
+        case 'enable-group-auto-replies': {
+            const entity = currentEntity(context);
+            if (!entity || entity.type !== 'group') break;
+            try {
+                await saveGroupConfiguration(entity.item, { activation_strategy: 0 });
+                notify('群組已啟用自然主動回覆。');
+                await openGroupMembersPanel();
+            } catch (error) {
+                console.error('[墨藍藝廊] 啟用群組主動回覆失敗', error);
+                notify('無法更新群組回覆策略。', 'error');
+            }
+            break;
+        }
         case 'generate-memory-summary': break;
         case 'clear-memory-summary': break;
         case 'rename-chat':
@@ -3128,13 +3270,6 @@ async function handleRootClick(event) {
             });
             break;
         }
-        case 'bookmark-message': {
-            const id = Number(actionElement.dataset.messageId);
-            await context.executeSlashCommandsWithOptions('/checkpoint-create mesId=' + id);
-            notify('已將訊息建立為 Checkpoint。');
-            refreshAll();
-            break;
-        }
         case 'regenerate': await regenerate(); break;
         case 'attach': {
             const input = document.getElementById('file_form_input');
@@ -3189,11 +3324,38 @@ function subscribeToSillyTavern() {
     subscribe(events.MESSAGE_DELETED, refreshMessages);
     subscribe(events.MESSAGE_SWIPED, refreshMessages);
     subscribe(events.STREAM_TOKEN_RECEIVED, () => { if (isOpen) scheduleMessageRefresh(); });
+    subscribe(events.GROUP_WRAPPER_STARTED, () => {
+        groupReplyBatchActive = true;
+        groupDraftOverLimit = false;
+        groupReplyCounts.clear();
+        permitManualGeneration(180000);
+    });
+    subscribe(events.GROUP_MEMBER_DRAFTED, (characterId) => {
+        const character = getContext()?.characters?.[Number(characterId)];
+        const key = String(character?.avatar || character?.name || characterId);
+        const count = (groupReplyCounts.get(key) || 0) + 1;
+        groupReplyCounts.set(key, count);
+        groupDraftOverLimit = count > 2;
+    });
+    subscribe(events.GROUP_WRAPPER_FINISHED, () => {
+        groupReplyBatchActive = false;
+        groupDraftOverLimit = false;
+        groupReplyCounts.clear();
+        manualGenerationPermitUntil = 0;
+        blockedGenerationUntil = 0;
+        isBusy = false;
+        if (isOpen) { refreshAll(); loadChatEntries(); }
+    });
     subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
         const liveContext = getContext();
         currentGeneration = { type: String(type || 'normal'), chatId: String(liveContext?.chatId || ''), startedAt: Date.now() };
         if (dryRun) return;
-        const hasExplicitUserAction = Date.now() < manualGenerationPermitUntil;
+        if (groupReplyBatchActive && groupDraftOverLimit) {
+            blockedGenerationUntil = Date.now() + 10000;
+            setTimeout(() => liveContext?.stopGeneration?.(), 0);
+            return;
+        }
+        const hasExplicitUserAction = groupReplyBatchActive || Date.now() < manualGenerationPermitUntil;
         if (isOpen && !hasExplicitUserAction) {
             blockedGenerationUntil = Date.now() + 10000;
             manualGenerationPermitUntil = 0;
@@ -3213,7 +3375,7 @@ function subscribeToSillyTavern() {
             isBusy = false;
             return;
         }
-        manualGenerationPermitUntil = 0;
+        if (!groupReplyBatchActive) manualGenerationPermitUntil = 0;
         blockedGenerationUntil = 0;
         isBusy = true;
         if (isOpen) renderComposer();
@@ -3225,8 +3387,8 @@ function subscribeToSillyTavern() {
         disableGroupAutoMode();
         renderComposer();
     });
-    subscribe(events.GENERATION_ENDED, () => { manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); setTimeout(maybeAutoUpdateCreatorWidget, 700); });
-    subscribe(events.GENERATION_STOPPED, () => { manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) renderComposer(); });
+    subscribe(events.GENERATION_ENDED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); setTimeout(maybeAutoUpdateCreatorWidget, 700); });
+    subscribe(events.GENERATION_STOPPED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) renderComposer(); });
     subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
     subscribe(events.MAIN_API_CHANGED, refresh);
     subscribe(events.WORLDINFO_UPDATED, refresh);
