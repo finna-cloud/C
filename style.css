@@ -1,0 +1,1129 @@
+:root {
+    --mol-paper: #f3f0e8;
+    --mol-light: #faf8f2;
+    --mol-ink: #171715;
+    --mol-muted: #78766f;
+    --mol-line: #d9d4c8;
+    --mol-blue: #204bd9;
+    --mol-blue-soft: #e3e8fa;
+    --mol-danger: #a63d2d;
+}
+
+body.mol-gallery-open {
+    overflow: hidden !important;
+}
+
+#molan-gallery-root,
+#molan-gallery-root * {
+    box-sizing: border-box;
+}
+
+#molan-gallery-root {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: grid;
+    grid-template-columns: 72px 292px minmax(430px, 1fr) 294px;
+    height: 100dvh;
+    overflow: hidden;
+    color: var(--mol-ink);
+    background: var(--mol-paper);
+    font-family: Arial, "PingFang TC", "Noto Sans TC", sans-serif;
+    font-size: 14px;
+}
+
+#molan-gallery-root[hidden] {
+    display: none !important;
+}
+
+#molan-gallery-root button,
+#molan-gallery-root input,
+#molan-gallery-root textarea {
+    color: inherit;
+    font: inherit;
+}
+
+#molan-gallery-root button {
+    cursor: pointer;
+}
+
+.mol-rail {
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 18px 0;
+    color: white;
+    background: var(--mol-ink);
+}
+
+.mol-brand {
+    position: relative;
+    width: 42px;
+    height: 48px;
+    border: 0;
+    color: white !important;
+    background: transparent;
+}
+
+.mol-brand span {
+    position: relative;
+    z-index: 1;
+    font: italic 34px/1 Georgia, serif;
+}
+
+.mol-brand::after {
+    position: absolute;
+    top: 13px;
+    left: 14px;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--mol-blue);
+    content: "";
+    transform: rotate(25deg);
+}
+
+.mol-rail nav {
+    display: grid;
+    gap: 12px;
+    margin-top: 58px;
+}
+
+.mol-rail-button {
+    display: grid;
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    place-items: center;
+    border: 0;
+    color: #8c8b87 !important;
+    background: transparent;
+    transition: .2s ease;
+}
+
+.mol-rail-button:hover,
+.mol-rail-button.active {
+    color: white !important;
+}
+
+.mol-rail-button.active {
+    background: var(--mol-blue);
+}
+
+.mol-rail-bottom {
+    margin-top: auto;
+}
+
+.mol-profile-dot {
+    width: 36px;
+    height: 36px;
+    border: 1px solid #55544f;
+    border-radius: 50%;
+    color: white !important;
+    background: #292926;
+}
+
+.mol-chat-list {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    border-right: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+}
+
+.mol-list-heading {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 28px 22px 18px;
+}
+
+.mol-eyebrow {
+    margin: 0 0 5px;
+    color: var(--mol-blue);
+    font: 600 9px/1.2 Arial, sans-serif;
+    letter-spacing: .18em;
+}
+
+.mol-list-heading h1 {
+    margin: 0;
+    font: 400 28px/1.1 Georgia, "Noto Serif TC", serif;
+}
+
+.mol-icon-button {
+    display: grid;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    place-items: center;
+    border: 1px solid var(--mol-line);
+    border-radius: 50%;
+    background: transparent;
+    transition: .2s ease;
+}
+
+.mol-icon-button:hover {
+    border-color: var(--mol-ink);
+    color: white !important;
+    background: var(--mol-ink);
+}
+
+.mol-search {
+    display: flex;
+    height: 39px;
+    align-items: center;
+    gap: 8px;
+    margin: 0 22px;
+    border-bottom: 1px solid var(--mol-ink);
+}
+
+.mol-search input {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    color: var(--mol-ink);
+    background: transparent;
+    font-size: 12px;
+}
+
+.mol-filters {
+    display: flex;
+    gap: 18px;
+    padding: 17px 22px 12px;
+}
+
+.mol-filters button {
+    padding: 0 0 5px;
+    border: 0;
+    color: var(--mol-muted);
+    background: transparent;
+    font-size: 11px;
+}
+
+.mol-filters button.active {
+    border-bottom: 2px solid var(--mol-blue);
+    color: var(--mol-ink);
+}
+
+.mol-entity-list {
+    overflow-y: auto;
+    padding: 0 10px;
+}
+
+.mol-chat-card {
+    position: relative;
+    display: grid;
+    width: 100%;
+    grid-template-columns: 44px 1fr;
+    gap: 11px;
+    padding: 14px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--mol-line);
+    text-align: left;
+    background: transparent;
+    transition: .2s ease;
+}
+
+.mol-chat-card:hover {
+    background: rgba(255, 255, 255, .45);
+}
+
+.mol-chat-card.active {
+    background: var(--mol-light);
+    box-shadow: inset 3px 0 var(--mol-blue);
+}
+
+.mol-avatar {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    overflow: hidden;
+    place-items: center;
+    border-radius: 50% 50% 46% 54%;
+    color: white;
+    background: var(--mol-blue);
+    font: 19px/1 Georgia, serif;
+}
+
+.mol-avatar.small {
+    width: 35px;
+    height: 35px;
+    font-size: 15px;
+}
+
+.mol-avatar img,
+.mol-portrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.mol-chat-copy {
+    display: block;
+    min-width: 0;
+}
+
+.mol-chat-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mol-chat-line strong {
+    font: 500 13px/1.2 "Noto Serif TC", serif;
+}
+
+.mol-chat-line small,
+.mol-role {
+    color: var(--mol-muted);
+    font-size: 9px;
+    letter-spacing: .06em;
+}
+
+.mol-role {
+    display: block;
+    margin-top: 3px;
+}
+
+.mol-preview {
+    display: block;
+    overflow: hidden;
+    margin-top: 7px;
+    color: #55534d;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mol-list-note {
+    margin: auto 22px 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--mol-ink);
+}
+
+.mol-list-note span {
+    color: var(--mol-blue);
+    font-size: 9px;
+    letter-spacing: .16em;
+}
+
+.mol-list-note p {
+    margin: 7px 0 0;
+    color: #5d5b54;
+    font: italic 12px/1.6 Georgia, "Noto Serif TC", serif;
+}
+
+.mol-empty {
+    padding: 30px 18px;
+    color: var(--mol-muted);
+    text-align: center;
+    font-size: 11px;
+    line-height: 1.7;
+}
+
+.mol-conversation {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    grid-template-rows: 70px 44px 1fr auto;
+    background: var(--mol-light);
+}
+
+.mol-conversation::before {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: radial-gradient(#4d4b46 .35px, transparent .35px);
+    background-size: 4px 4px;
+    content: "";
+    opacity: .18;
+}
+
+.mol-header {
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--mol-line);
+    background: rgba(250, 248, 242, .94);
+}
+
+.mol-title {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+}
+
+.mol-title > div:last-child {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+}
+
+.mol-title strong {
+    overflow: hidden;
+    max-width: 220px;
+    font: 500 15px/1.2 "Noto Serif TC", serif;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mol-title span {
+    overflow: hidden;
+    max-width: 260px;
+    margin-top: 3px;
+    color: var(--mol-muted);
+    font-size: 9px;
+    letter-spacing: .06em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mol-mobile-menu {
+    display: none;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.mol-header-actions {
+    display: flex;
+    gap: 7px;
+}
+
+.mol-text-button {
+    display: flex;
+    height: 36px;
+    align-items: center;
+    gap: 7px;
+    padding: 0 14px;
+    border: 1px solid var(--mol-line);
+    border-radius: 20px;
+    background: transparent;
+    font-size: 11px;
+}
+
+.mol-text-button.active,
+.mol-text-button:hover {
+    border-color: var(--mol-blue);
+    color: var(--mol-blue) !important;
+}
+
+.mol-chapter {
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 28px;
+    color: var(--mol-muted);
+    font-size: 9px;
+    letter-spacing: .14em;
+}
+
+.mol-chapter span:first-child {
+    color: var(--mol-blue);
+}
+
+.mol-chapter i {
+    height: 1px;
+    flex: 1;
+    background: var(--mol-line);
+}
+
+.mol-messages {
+    z-index: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px clamp(28px, 6vw, 88px) 36px;
+    scroll-behavior: smooth;
+}
+
+.mol-scene {
+    max-width: 430px;
+    margin: 8px auto 32px;
+    text-align: center;
+}
+
+.mol-scene span {
+    color: var(--mol-blue);
+    font-size: 9px;
+    letter-spacing: .16em;
+}
+
+.mol-scene strong {
+    display: block;
+    overflow: hidden;
+    margin-top: 7px;
+    font: 500 14px/1.5 "Noto Serif TC", serif;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mol-scene p {
+    margin: 4px 0;
+    color: var(--mol-muted);
+    font-size: 10px;
+}
+
+.mol-message {
+    max-width: 630px;
+    margin: 0 auto 28px;
+}
+
+.mol-message.user {
+    max-width: 520px;
+    margin-right: 0;
+    margin-left: auto;
+    padding: 16px 18px;
+    border-left: 2px solid var(--mol-blue);
+    background: var(--mol-blue-soft);
+}
+
+.mol-message.system {
+    padding: 10px 14px;
+    border: 1px dashed var(--mol-line);
+    color: var(--mol-muted);
+}
+
+.mol-message-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 9px;
+}
+
+.mol-message-meta strong {
+    font: 500 12px/1 "Noto Serif TC", serif;
+}
+
+.mol-message-meta span {
+    color: var(--mol-muted);
+    font-size: 9px;
+}
+
+.mol-message-text {
+    color: #292824;
+    font: 400 14px/1.9 Georgia, "Noto Serif TC", serif;
+    letter-spacing: .02em;
+    overflow-wrap: anywhere;
+}
+
+.mol-message-text p {
+    margin: 0 0 .8em;
+}
+
+.mol-message-text p:last-child {
+    margin-bottom: 0;
+}
+
+.mol-message-text pre,
+.mol-message-text code {
+    max-width: 100%;
+    white-space: pre-wrap;
+}
+
+.mol-message-tools {
+    display: flex;
+    gap: 12px;
+    margin-top: 9px;
+    opacity: 0;
+    transition: .2s ease;
+}
+
+.mol-message:hover .mol-message-tools,
+.mol-message:focus-within .mol-message-tools {
+    opacity: 1;
+}
+
+.mol-message-tools button {
+    padding: 0;
+    border: 0;
+    color: var(--mol-muted);
+    background: transparent;
+    font-size: 9px;
+}
+
+.mol-message-tools button:hover {
+    color: var(--mol-blue);
+}
+
+.compact-messages .mol-message {
+    margin-bottom: 16px;
+}
+
+.compact-messages .mol-message-text {
+    font-size: 13px;
+    line-height: 1.65;
+}
+
+.mol-composer-wrap {
+    z-index: 2;
+    padding: 0 clamp(22px, 5vw, 68px) 18px;
+    background: linear-gradient(transparent, var(--mol-light) 22%);
+}
+
+.mol-composer {
+    display: grid;
+    min-height: 58px;
+    grid-template-columns: 38px 1fr 40px;
+    align-items: center;
+    padding: 7px 8px;
+    border: 1px solid var(--mol-ink);
+    background: var(--mol-light);
+    box-shadow: 7px 7px 0 var(--mol-blue);
+}
+
+.mol-composer textarea {
+    min-height: 24px;
+    max-height: 100px;
+    padding: 4px 8px;
+    resize: none;
+    border: 0;
+    outline: 0;
+    color: var(--mol-ink);
+    background: transparent;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.mol-add-button,
+.mol-send-button {
+    display: grid;
+    height: 38px;
+    padding: 0;
+    place-items: center;
+    border: 0;
+    background: transparent;
+}
+
+.mol-send-button {
+    width: 38px;
+    border-radius: 50%;
+    color: white !important;
+    background: var(--mol-ink);
+}
+
+.mol-send-button:hover {
+    background: var(--mol-blue);
+}
+
+.mol-composer-meta {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 11px;
+    color: var(--mol-muted);
+    font-size: 9px;
+    letter-spacing: .04em;
+}
+
+.mol-detail {
+    overflow-y: auto;
+    padding: 22px;
+    border-left: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+}
+
+.mol-art-card {
+    position: relative;
+    padding: 9px;
+    border: 1px solid var(--mol-ink);
+    background: var(--mol-light);
+}
+
+.mol-art-index {
+    position: absolute;
+    z-index: 2;
+    top: 16px;
+    left: 16px;
+    padding: 4px 6px;
+    background: var(--mol-light);
+    font-size: 8px;
+    letter-spacing: .16em;
+}
+
+.mol-portrait {
+    position: relative;
+    display: grid;
+    height: 150px;
+    overflow: hidden;
+    place-items: center;
+    color: white;
+    background: var(--mol-blue);
+    font: italic 72px/1 Georgia, serif;
+}
+
+.mol-portrait::after {
+    position: absolute;
+    top: 38px;
+    left: -30px;
+    width: 165px;
+    height: 165px;
+    border: 1px solid rgba(255, 255, 255, .7);
+    border-radius: 50%;
+    content: "";
+}
+
+.mol-portrait > span {
+    z-index: 2;
+}
+
+.mol-portrait > i {
+    position: absolute;
+    width: 190px;
+    height: 1px;
+    background: rgba(255, 255, 255, .75);
+    transform: rotate(-22deg);
+}
+
+.mol-portrait > i.one {
+    top: 32px;
+    right: -40px;
+}
+
+.mol-portrait > i.two {
+    bottom: 24px;
+    left: -35px;
+    transform: rotate(18deg);
+}
+
+.mol-art-card > p {
+    margin: 9px 2px 2px;
+    font: 600 9px/1.4 Arial, sans-serif;
+    letter-spacing: .12em;
+}
+
+.mol-profile-heading {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 20px 0 13px;
+    border-bottom: 1px solid var(--mol-ink);
+}
+
+.mol-profile-heading h2 {
+    margin: 0;
+    font: 400 26px/1 Georgia, "Noto Serif TC", serif;
+}
+
+.mol-status {
+    color: var(--mol-blue);
+    font-size: 8px;
+    letter-spacing: .15em;
+}
+
+.mol-status::before {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: var(--mol-blue);
+    content: "";
+}
+
+.mol-status.inactive {
+    color: var(--mol-muted);
+}
+
+.mol-profile-note {
+    margin: 13px 0 16px;
+    color: #595750;
+    font: 11px/1.8 Georgia, "Noto Serif TC", serif;
+}
+
+.mol-stat-row {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 34px 1fr 24px;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    border: 0;
+    text-align: left;
+    background: transparent;
+    font-size: 9px;
+}
+
+.mol-stat-bar {
+    height: 3px;
+    background: var(--mol-line);
+}
+
+.mol-stat-bar i {
+    display: block;
+    height: 100%;
+    background: var(--mol-blue);
+}
+
+.mol-tag-section {
+    margin-top: 18px;
+}
+
+.mol-tag-section > span {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--mol-muted);
+    font-size: 9px;
+}
+
+.mol-tag-section > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.mol-tag-section button {
+    padding: 5px 9px;
+    border: 1px solid var(--mol-line);
+    background: transparent;
+    font-size: 9px;
+}
+
+.mol-tag-section button.active {
+    border-color: var(--mol-blue);
+    color: white !important;
+    background: var(--mol-blue);
+}
+
+.mol-context-list {
+    display: grid;
+    margin-top: 19px;
+    border-top: 1px solid var(--mol-line);
+}
+
+.mol-context-list > button {
+    display: grid;
+    grid-template-columns: 31px 1fr auto;
+    align-items: center;
+    gap: 9px;
+    padding: 12px 0;
+    border: 0;
+    border-bottom: 1px solid var(--mol-line);
+    text-align: left;
+    background: transparent;
+}
+
+.mol-context-icon {
+    display: grid;
+    width: 29px;
+    height: 29px;
+    place-items: center;
+    border: 1px solid var(--mol-line);
+    color: var(--mol-blue);
+}
+
+.mol-context-list strong,
+.mol-context-list small {
+    display: block;
+}
+
+.mol-context-list strong {
+    font: 500 11px/1.2 "Noto Serif TC", serif;
+}
+
+.mol-context-list small {
+    margin-top: 3px;
+    color: var(--mol-muted);
+    font-size: 8px;
+}
+
+.mol-model-note {
+    display: grid;
+    width: 100%;
+    gap: 3px;
+    margin-top: 19px;
+    padding: 11px;
+    border: 1px solid var(--mol-ink);
+    text-align: left;
+    background: transparent;
+}
+
+.mol-model-note span {
+    color: var(--mol-blue);
+    font-size: 8px;
+    letter-spacing: .15em;
+}
+
+.mol-model-note strong {
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.mol-model-note small {
+    color: var(--mol-muted);
+    font-size: 8px;
+}
+
+.focus-mode {
+    grid-template-columns: 72px 0 minmax(430px, 1fr) 0 !important;
+}
+
+.focus-mode .mol-chat-list,
+.focus-mode .mol-detail {
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.mol-dialog-layer {
+    position: fixed;
+    z-index: 8;
+    inset: 0;
+    display: grid;
+    padding: 20px;
+    place-items: center;
+    background: rgba(23, 23, 21, .55);
+    backdrop-filter: blur(4px);
+}
+
+.mol-dialog-layer[hidden] {
+    display: none !important;
+}
+
+.mol-dialog {
+    position: relative;
+    width: min(460px, 100%);
+    padding: 28px;
+    border: 1px solid var(--mol-ink);
+    color: var(--mol-ink);
+    background: var(--mol-light);
+    box-shadow: 10px 10px 0 var(--mol-blue);
+}
+
+.mol-dialog h3 {
+    margin: 0 0 22px;
+    font: 400 25px/1.2 Georgia, "Noto Serif TC", serif;
+}
+
+.mol-dialog label,
+.mol-dialog label > span {
+    display: grid;
+    gap: 8px;
+}
+
+.mol-dialog label > span {
+    color: var(--mol-muted);
+    font-size: 10px;
+}
+
+.mol-dialog input[type="text"],
+.mol-dialog textarea {
+    width: 100%;
+    padding: 11px;
+    border: 1px solid var(--mol-line);
+    outline: 0;
+    color: var(--mol-ink);
+    background: var(--mol-paper);
+}
+
+.mol-dialog input:focus,
+.mol-dialog textarea:focus {
+    border-color: var(--mol-blue);
+}
+
+.mol-dialog input[type="range"] {
+    width: 100%;
+    accent-color: var(--mol-blue);
+}
+
+.mol-dialog-close {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 23px;
+}
+
+.mol-dialog-copy {
+    margin: -8px 0 24px;
+    color: var(--mol-muted);
+    font: 13px/1.7 Georgia, "Noto Serif TC", serif;
+}
+
+.mol-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 22px;
+}
+
+.mol-dialog-actions button,
+.mol-action-dialog > button:not(.mol-dialog-close) {
+    padding: 9px 15px;
+    border: 1px solid var(--mol-line);
+    background: transparent;
+}
+
+.mol-dialog-actions button.primary {
+    border-color: var(--mol-blue);
+    color: white !important;
+    background: var(--mol-blue);
+}
+
+.mol-action-dialog > button:not(.mol-dialog-close) {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 12px;
+    border-width: 1px 0 0;
+    text-align: left;
+}
+
+.mol-action-dialog > button:not(.mol-dialog-close):hover {
+    color: var(--mol-blue);
+}
+
+.mol-toast {
+    position: fixed;
+    z-index: 12;
+    right: 24px;
+    bottom: 24px;
+    max-width: min(360px, calc(100vw - 32px));
+    padding: 12px 16px;
+    border-left: 3px solid var(--mol-blue);
+    color: var(--mol-ink);
+    background: var(--mol-light);
+    box-shadow: 0 10px 35px rgba(23, 23, 21, .18);
+    font-size: 12px;
+    opacity: 0;
+    transform: translateY(12px);
+    transition: .2s ease;
+}
+
+.mol-toast.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.mol-toast-warning {
+    border-color: #c78120;
+}
+
+.mol-toast-error {
+    border-color: var(--mol-danger);
+}
+
+@media (max-width: 1180px) {
+    #molan-gallery-root {
+        grid-template-columns: 64px 270px minmax(420px, 1fr);
+    }
+
+    .mol-detail {
+        position: fixed;
+        z-index: 6;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 294px;
+        box-shadow: -16px 0 40px rgba(23, 23, 21, .12);
+        transform: translateX(100%);
+        transition: transform .25s ease;
+    }
+
+    .detail-open .mol-detail {
+        transform: translateX(0);
+    }
+}
+
+@media (max-width: 780px) {
+    #molan-gallery-root,
+    #molan-gallery-root.focus-mode {
+        grid-template-columns: 1fr !important;
+    }
+
+    .mol-rail {
+        display: none;
+    }
+
+    .mol-chat-list {
+        position: fixed;
+        z-index: 7;
+        inset: 0 auto 0 0;
+        width: min(315px, 88vw);
+        box-shadow: 16px 0 40px rgba(23, 23, 21, .18);
+        transform: translateX(-100%);
+        transition: transform .25s ease;
+    }
+
+    .mobile-sidebar-open .mol-chat-list {
+        transform: translateX(0);
+    }
+
+    .mol-conversation {
+        min-height: 100dvh;
+        grid-column: 1;
+        grid-template-rows: 64px 38px 1fr auto;
+    }
+
+    .mol-header {
+        padding: 0 14px;
+    }
+
+    .mol-mobile-menu {
+        display: grid;
+        place-items: center;
+    }
+
+    .mol-text-button {
+        width: 36px;
+        justify-content: center;
+        padding: 0;
+    }
+
+    .mol-text-button span {
+        display: none;
+    }
+
+    .mol-messages {
+        padding: 6px 20px 30px;
+    }
+
+    .mol-message-text {
+        font-size: 13px;
+        line-height: 1.85;
+    }
+
+    .mol-message-tools {
+        opacity: 1;
+    }
+
+    .mol-composer-wrap {
+        padding: 0 17px 14px;
+    }
+
+    .mol-composer {
+        box-shadow: 4px 4px 0 var(--mol-blue);
+    }
+
+    .mol-composer-meta {
+        justify-content: flex-end;
+    }
+
+    .mol-composer-meta span:first-child {
+        overflow: hidden;
+        max-width: 65%;
+        margin-right: auto;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #molan-gallery-root *,
+    #molan-gallery-root *::before,
+    #molan-gallery-root *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+    }
+}

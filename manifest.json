@@ -1,0 +1,14 @@
+{
+  "display_name": "墨藍藝廊聊天介面",
+  "loading_order": 100,
+  "js": "index.js",
+  "css": "style.css",
+  "author": "yu & OpenAI",
+  "version": "1.0.0",
+  "auto_update": false,
+  "minimum_client_version": "1.18.0",
+  "hooks": {
+    "activate": "onActivate",
+    "disable": "onDisable"
+  }
+}
