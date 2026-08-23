@@ -84,6 +84,7 @@ let fetchWrapper = null;
 let worldInfoModulePromise = null;
 let scriptModulePromise = null;
 let groupModulePromise = null;
+let personaModulePromise = null;
 const subscribedEvents = [];
 
 function getContext() {
@@ -447,6 +448,171 @@ function getGroupApi() {
     return groupModulePromise;
 }
 
+function getPersonaApi() {
+    personaModulePromise ||= import('/scripts/personas.js');
+    return personaModulePromise;
+}
+
+function playerAvatarUrl(avatarId, cacheBust = '') {
+    if (!avatarId) return '';
+    const suffix = cacheBust ? '?t=' + encodeURIComponent(cacheBust) : '';
+    return '/User%20Avatars/' + encodeURIComponent(String(avatarId)) + suffix;
+}
+
+async function getPlayerProfiles() {
+    const context = getContext();
+    const api = await getPersonaApi();
+    const avatars = await api.getUserAvatars(false).catch(() => []);
+    const settings = context?.powerUserSettings || {};
+    const names = settings.personas || {};
+    const descriptions = settings.persona_descriptions || {};
+    return (Array.isArray(avatars) ? avatars : []).map((avatarId) => {
+        const descriptor = descriptions[avatarId] || {};
+        return {
+            avatarId,
+            name: String(names[avatarId] || '[未命名玩家]'),
+            title: String(descriptor.title || ''),
+            description: String(descriptor.description || ''),
+            position: Number.isFinite(Number(descriptor.position)) ? Number(descriptor.position) : 0,
+            depth: Number.isFinite(Number(descriptor.depth)) ? Number(descriptor.depth) : 2,
+            role: Number.isFinite(Number(descriptor.role)) ? Number(descriptor.role) : 0,
+            lorebook: String(descriptor.lorebook || ''),
+            connections: Array.isArray(descriptor.connections) ? descriptor.connections : [],
+            active: api.user_avatar === avatarId,
+            chatLocked: context?.chatMetadata?.persona === avatarId,
+        };
+    }).sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'zh-Hant'));
+}
+
+async function uploadPlayerAvatar(file, overwriteName = '') {
+    const api = await getScriptApi();
+    let avatarFile = file;
+    if (!(avatarFile instanceof File)) {
+        const response = await fetch('/img/user-default.png');
+        if (!response.ok) throw new Error('Default avatar unavailable');
+        const blob = await response.blob();
+        avatarFile = new File([blob], 'player-avatar.png', { type: blob.type || 'image/png' });
+    }
+    const formData = new FormData();
+    formData.append('avatar', avatarFile);
+    if (overwriteName) formData.append('overwrite_name', overwriteName);
+    const response = await fetch('/api/avatars/upload', {
+        method: 'POST',
+        headers: api.getRequestHeaders({ omitContentType: true }),
+        cache: 'no-cache',
+        body: formData,
+    });
+    if (!response.ok) throw new Error('Avatar upload failed: ' + response.status);
+    const result = await response.json();
+    return String(result?.path || overwriteName || '');
+}
+
+async function savePlayerProfile(avatarId, values, avatarFile) {
+    const context = getContext();
+    const personaApi = await getPersonaApi();
+    const scriptApi = await getScriptApi();
+    const settings = context.powerUserSettings;
+    settings.personas ||= {};
+    settings.persona_descriptions ||= {};
+    const editing = Boolean(avatarId && settings.personas[avatarId]);
+    let finalAvatarId = avatarId;
+    if (!editing) finalAvatarId = await uploadPlayerAvatar(avatarFile);
+    else if (avatarFile instanceof File && avatarFile.size) await uploadPlayerAvatar(avatarFile, finalAvatarId);
+    if (!finalAvatarId) throw new Error('Avatar id unavailable');
+
+    const previous = settings.persona_descriptions[finalAvatarId] || {};
+    const descriptor = {
+        ...previous,
+        description: values.description,
+        title: values.title,
+        position: Number.isFinite(Number(previous.position)) ? Number(previous.position) : 0,
+        depth: Number.isFinite(Number(previous.depth)) ? Number(previous.depth) : 2,
+        role: Number.isFinite(Number(previous.role)) ? Number(previous.role) : 0,
+        lorebook: String(previous.lorebook || ''),
+        connections: Array.isArray(previous.connections) ? previous.connections : [],
+    };
+
+    if (!editing) {
+        await personaApi.initPersona(finalAvatarId, values.name, values.description, values.title, {
+            position: descriptor.position,
+            depth: descriptor.depth,
+            role: descriptor.role,
+            lorebook: descriptor.lorebook,
+        });
+        settings.persona_descriptions[finalAvatarId] = descriptor;
+    } else {
+        settings.personas[finalAvatarId] = values.name;
+        settings.persona_descriptions[finalAvatarId] = descriptor;
+        context.saveSettingsDebounced();
+        if (context.eventTypes.PERSONA_UPDATED) {
+            await context.eventSource.emit(context.eventTypes.PERSONA_UPDATED, finalAvatarId);
+        }
+    }
+
+    if (personaApi.user_avatar === finalAvatarId) {
+        settings.persona_description = descriptor.description;
+        settings.persona_description_position = descriptor.position;
+        settings.persona_description_depth = descriptor.depth;
+        settings.persona_description_role = descriptor.role;
+        settings.persona_description_lorebook = descriptor.lorebook;
+        scriptApi.setUserName(values.name, { toastPersonaNameChange: false });
+        personaApi.setPersonaDescription();
+    }
+    await personaApi.getUserAvatars(true, finalAvatarId);
+    return finalAvatarId;
+}
+
+async function selectPlayerProfile(avatarId) {
+    const context = getContext();
+    const api = await getPersonaApi();
+    const settings = context.powerUserSettings;
+    if (!settings?.personas?.[avatarId]) throw new Error('Persona not found');
+    await api.setUserAvatar(avatarId, { toastPersonaNameChange: false, navigateToCurrent: true });
+    if (context.chatId) {
+        context.chatMetadata.persona = avatarId;
+        await context.saveMetadata();
+    }
+    context.saveSettingsDebounced();
+    refreshAll();
+}
+
+async function deletePlayerProfile(avatarId) {
+    const context = getContext();
+    const personaApi = await getPersonaApi();
+    const scriptApi = await getScriptApi();
+    const settings = context.powerUserSettings;
+    const name = String(settings?.personas?.[avatarId] || '未命名玩家');
+    const response = await fetch('/api/avatars/delete', {
+        method: 'POST',
+        headers: scriptApi.getRequestHeaders(),
+        body: JSON.stringify({ avatar: avatarId }),
+    });
+    if (!response.ok && response.status !== 404) throw new Error('Persona delete failed: ' + response.status);
+    delete settings.personas?.[avatarId];
+    delete settings.persona_descriptions?.[avatarId];
+    if (settings.default_persona === avatarId) settings.default_persona = null;
+    if (context.chatMetadata?.persona === avatarId) {
+        delete context.chatMetadata.persona;
+        await context.saveMetadata();
+    }
+    context.saveSettingsDebounced();
+    if (context.eventTypes.PERSONA_DELETED) {
+        await context.eventSource.emit(context.eventTypes.PERSONA_DELETED, { avatarId, name });
+    }
+    if (personaApi.user_avatar === avatarId) {
+        const remaining = await personaApi.getUserAvatars(false).catch(() => []);
+        const next = remaining.find((item) => settings.personas?.[item]);
+        if (next) await personaApi.setUserAvatar(next, { toastPersonaNameChange: false });
+        else {
+            personaApi.initUserAvatar('');
+            settings.persona_description = '';
+            settings.persona_description_lorebook = '';
+            scriptApi.setUserName('User', { toastPersonaNameChange: false });
+        }
+    }
+    await personaApi.getUserAvatars(true);
+}
+
 function permitManualGeneration(milliseconds = 60000) {
     blockedGenerationUntil = 0;
     manualGenerationPermitUntil = Date.now() + milliseconds;
@@ -590,11 +756,12 @@ function createRoot() {
         '  <nav>',
         '    <button class="mol-rail-button active" data-action="show-chats" title="對話"><i class="fa-solid fa-pen-nib"></i></button>',
         '    <button class="mol-rail-button" data-action="character-overview" title="角色總覽"><i class="fa-solid fa-address-card"></i></button>',
+        '    <button class="mol-rail-button" data-action="player-profiles" title="玩家設定檔"><i class="fa-solid fa-user-pen"></i></button>',
         '    <button class="mol-rail-button" data-action="world-info" title="世界書"><i class="fa-solid fa-book-atlas"></i></button>',
         '    <button class="mol-rail-button" data-action="creator-widgets" title="創作者小工具"><i class="fa-solid fa-screwdriver-wrench"></i></button>',
         '    <button class="mol-rail-button" data-action="continue" title="續寫"><i class="fa-solid fa-wand-magic-sparkles"></i></button>',
         '  </nav>',
-        '  <div class="mol-rail-bottom"><button class="mol-profile-dot" data-action="user-settings" title="使用者設定">U</button></div>',
+        '  <div class="mol-rail-bottom"><button class="mol-profile-dot" data-action="player-profiles" title="玩家設定檔">U</button><button class="mol-rail-settings" data-action="user-settings" title="藝廊介面設定"><i class="fa-solid fa-gear"></i></button></div>',
         '</aside>',
         '<aside class="mol-chat-list" aria-label="聊天室列表">',
         '  <div class="mol-list-heading"><div><p class="mol-eyebrow">COLLECTION</p><h1>對話</h1></div><button class="mol-icon-button" data-action="new-chat" title="建立新對話"><i class="fa-solid fa-plus"></i></button></div>',
@@ -633,6 +800,7 @@ function createRoot() {
         '  <p id="mol-profile-note" class="mol-profile-note">選擇角色後顯示資料。</p>',
         '  <button class="mol-stat-row" data-action="relationship" title="調整關係值"><span>關係</span><span class="mol-stat-bar"><i id="mol-relationship-bar"></i></span><strong id="mol-relationship">50</strong></button>',
         '  <div class="mol-context-list">',
+        '    <button data-action="player-profiles"><span class="mol-context-icon"><i class="fa-solid fa-user-pen"></i></span><span><strong>玩家設定檔</strong><small id="mol-player-summary">新增、修改、刪除與切換</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="world-info"><span class="mol-context-icon"><i class="fa-solid fa-book-atlas"></i></span><span><strong>世界書</strong><small id="mol-world-count">在藝廊內查看</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="memory-summary"><span class="mol-context-icon"><i class="fa-solid fa-leaf"></i></span><span><strong>記憶自動摘要</strong><small id="mol-memory-summary">尚未建立摘要</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="creator-widgets"><span class="mol-context-icon"><i class="fa-solid fa-screwdriver-wrench"></i></span><span><strong>創作者小工具</strong><small id="mol-widget-summary">目前聊天室尚未套用</small></span><i class="fa-solid fa-chevron-right"></i></button>',
@@ -806,6 +974,27 @@ function renderHeader() {
     document.getElementById(ROOT_ID)?.classList.toggle('detail-open', detailOpen);
     const focusButton = document.querySelector('#' + ROOT_ID + ' [data-action="focus"]');
     focusButton?.classList.toggle('active', focusMode);
+    renderPlayerProfileShortcut();
+}
+
+async function renderPlayerProfileShortcut() {
+    const context = getContext();
+    const dot = document.querySelector('#' + ROOT_ID + ' .mol-profile-dot');
+    const summary = document.getElementById('mol-player-summary');
+    if (!context || !dot) return;
+    try {
+        const api = await getPersonaApi();
+        const avatarId = api.user_avatar || context.chatMetadata?.persona || '';
+        const name = String(context.powerUserSettings?.personas?.[avatarId] || context.name1 || 'User');
+        dot.textContent = initials(name);
+        dot.title = '玩家設定檔：' + name;
+        dot.style.backgroundImage = avatarId ? 'url("' + playerAvatarUrl(avatarId) + '")' : '';
+        dot.classList.toggle('has-image', Boolean(avatarId));
+        if (summary) summary.textContent = name + (context.chatMetadata?.persona === avatarId ? ' · 已綁定目前聊天室' : ' · 目前使用中');
+    } catch {
+        dot.textContent = initials(context.name1 || 'User');
+        if (summary) summary.textContent = String(context.name1 || 'User');
+    }
 }
 
 function formattedMessage(message, index, context) {
@@ -1087,12 +1276,107 @@ function openMoreDialog() {
         '<button data-action="export-current-chat"><i class="fa-solid fa-file-arrow-down"></i><span>匯出對話 TXT</span></button>',
         '<button data-action="memory-summary"><i class="fa-solid fa-brain"></i><span>記憶自動摘要</span></button>',
         '<button data-action="creator-widgets"><i class="fa-solid fa-screwdriver-wrench"></i><span>創作者小工具</span></button>',
+        '<button data-action="player-profiles"><i class="fa-solid fa-user-pen"></i><span>玩家設定檔</span></button>',
         '<button data-action="delete-last"><i class="fa-solid fa-trash"></i><span>刪除最後訊息</span></button>',
         '<button data-action="delete-chat" class="danger"><i class="fa-solid fa-trash-can"></i><span>刪除目前聊天室</span></button>',
         '<button data-action="user-settings"><i class="fa-solid fa-palette"></i><span>藝廊介面設定</span></button>',
         '</div>',
     ].join('');
     layer.hidden = false;
+}
+
+async function openPlayerProfilesPanel() {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">PLAYER PROFILES</p><h3>玩家設定檔</h3><div class="mol-profile-loading"><i class="fa-solid fa-spinner fa-spin"></i> 正在讀取設定檔…</div></div>';
+    layer.hidden = false;
+    try {
+        const profiles = await getPlayerProfiles();
+        if (layer.hidden) return;
+        const cards = profiles.length ? profiles.map((profile) => [
+            '<article class="mol-player-card' + (profile.active ? ' active' : '') + '">',
+            '<span class="mol-player-avatar"><img src="' + escapeHtml(playerAvatarUrl(profile.avatarId, Date.now())) + '" alt=""></span>',
+            '<span class="mol-player-copy"><strong>' + escapeHtml(profile.name) + '</strong><small>' + escapeHtml(profile.title || truncate(profile.description, 70) || '尚未填寫玩家描述') + '</small><em>' + (profile.chatLocked ? '目前聊天室已綁定' : (profile.active ? '目前使用中' : '可套用')) + '</em></span>',
+            '<button data-action="select-player-profile" data-player-avatar="' + escapeHtml(profile.avatarId) + '"' + (profile.active && profile.chatLocked ? ' disabled' : '') + '>' + (profile.active && profile.chatLocked ? '已套用' : '套用') + '</button>',
+            '<button data-action="edit-player-profile" data-player-avatar="' + escapeHtml(profile.avatarId) + '">修改</button>',
+            '<button class="danger" data-action="delete-player-profile" data-player-avatar="' + escapeHtml(profile.avatarId) + '">刪除</button>',
+            '</article>',
+        ].join('')).join('') : '<div class="mol-profile-empty"><i class="fa-regular fa-user"></i><strong>尚未建立玩家設定檔</strong><span>建立後可在不同聊天室切換玩家名稱、頭像與提供給 AI 的人物描述。</span></div>';
+        layer.innerHTML = [
+            '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">PLAYER PROFILES</p><h3>玩家設定檔</h3>',
+            '<div class="mol-panel-toolbar"><button class="primary" data-action="new-player-profile"><i class="fa-solid fa-plus"></i> 新增設定檔</button><button data-action="refresh-player-profiles"><i class="fa-solid fa-rotate"></i> 重新整理</button></div>',
+            '<p class="mol-dialog-copy">每份設定檔皆使用 SillyTavern 原生 Persona 資料；套用後，玩家名稱、頭像與描述會提供給目前聊天室及 AI。</p>',
+            '<div class="mol-player-grid">' + cards + '</div></div>',
+        ].join('');
+    } catch (error) {
+        console.error('[墨藍藝廊] 讀取玩家設定檔失敗', error);
+        layer.innerHTML = '<div class="mol-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">PLAYER PROFILES</p><h3>無法讀取玩家設定檔</h3><p class="mol-dialog-copy">請確認 SillyTavern 已更新至支援 Persona 的版本，再重新整理後重試。</p></div>';
+    }
+}
+
+async function openPlayerProfileEditor(avatarId = '') {
+    closeDialog();
+    const context = getContext();
+    const layer = document.getElementById('mol-dialog');
+    if (!context || !layer) return;
+    const descriptor = context.powerUserSettings?.persona_descriptions?.[avatarId] || {};
+    const name = String(context.powerUserSettings?.personas?.[avatarId] || '');
+    const title = String(descriptor.title || '');
+    const description = String(descriptor.description || '');
+    const preview = avatarId
+        ? '<img src="' + escapeHtml(playerAvatarUrl(avatarId, Date.now())) + '" alt="">'
+        : '<span><i class="fa-regular fa-user"></i></span>';
+    layer.innerHTML = [
+        '<form class="mol-dialog mol-panel-dialog mol-player-editor"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">' + (avatarId ? 'EDIT PLAYER' : 'NEW PLAYER') + '</p><h3>' + (avatarId ? '修改玩家設定檔' : '新增玩家設定檔') + '</h3>',
+        '<div class="mol-player-editor-layout"><label class="mol-player-avatar-field"><span class="mol-player-avatar-preview">' + preview + '</span><strong>' + (avatarId ? '更換頭像' : '選擇頭像') + '</strong><small>未選擇時使用預設頭像</small><input name="avatar" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label>',
+        '<div class="mol-form-grid"><label><span>玩家名稱</span><input name="name" type="text" maxlength="100" required value="' + escapeHtml(name) + '"></label><label><span>設定檔標題（僅顯示）</span><input name="title" type="text" maxlength="120" value="' + escapeHtml(title) + '"></label>',
+        '<label class="wide"><span>玩家描述（會提供給 AI）</span><textarea name="description" rows="10" maxlength="30000" placeholder="例如：身分、外觀、個性、背景、偏好與互動界線…">' + escapeHtml(description) + '</textarea></label></div></div>',
+        '<div class="mol-dialog-actions"><button type="button" data-action="player-profiles">取消</button><button type="submit" class="primary">儲存設定檔</button></div></form>',
+    ].join('');
+    layer.hidden = false;
+    const form = layer.querySelector('form');
+    const fileInput = form.elements.avatar;
+    const previewHost = form.querySelector('.mol-player-avatar-preview');
+    let previewUrl = '';
+    const onFile = () => {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        previewUrl = URL.createObjectURL(file);
+        previewHost.innerHTML = '<img src="' + escapeHtml(previewUrl) + '" alt="頭像預覽">';
+    };
+    const onSubmit = async (event) => {
+        event.preventDefault();
+        const submit = form.querySelector('button[type="submit"]');
+        const data = new FormData(form);
+        const values = {
+            name: String(data.get('name') || '').trim(),
+            title: String(data.get('title') || '').trim(),
+            description: String(data.get('description') || '').trim(),
+        };
+        if (!values.name) { notify('請輸入玩家名稱。', 'warning'); return; }
+        submit.disabled = true;
+        submit.textContent = '儲存中…';
+        try {
+            await savePlayerProfile(avatarId, values, fileInput.files?.[0]);
+            notify(avatarId ? '玩家設定檔已更新。' : '玩家設定檔已新增。');
+            await openPlayerProfilesPanel();
+        } catch (error) {
+            console.error('[墨藍藝廊] 儲存玩家設定檔失敗', error);
+            notify('玩家設定檔儲存失敗，請確認頭像格式後重試。', 'error');
+            submit.disabled = false;
+            submit.textContent = '儲存設定檔';
+        }
+    };
+    fileInput.addEventListener('change', onFile);
+    form.addEventListener('submit', onSubmit);
+    activeDialogCleanup = () => {
+        fileInput.removeEventListener('change', onFile);
+        form.removeEventListener('submit', onSubmit);
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+    setTimeout(() => form.elements.name?.focus(), 0);
 }
 
 const MODEL_SELECTORS = {
@@ -2259,6 +2543,36 @@ async function handleRootClick(event) {
         case 'world-info': openInternalPanel('world-info'); break;
         case 'refresh-world-info': openInternalPanel('world-info'); break;
         case 'character-overview': openCharacterOverview(0, false); break;
+        case 'player-profiles': await openPlayerProfilesPanel(); break;
+        case 'refresh-player-profiles': await openPlayerProfilesPanel(); break;
+        case 'new-player-profile': await openPlayerProfileEditor(); break;
+        case 'edit-player-profile': await openPlayerProfileEditor(actionElement.dataset.playerAvatar || ''); break;
+        case 'select-player-profile':
+            try {
+                await selectPlayerProfile(actionElement.dataset.playerAvatar || '');
+                notify(context.chatId ? '玩家設定檔已套用並綁定目前聊天室。' : '玩家設定檔已套用。');
+                await openPlayerProfilesPanel();
+            } catch (error) {
+                console.error('[墨藍藝廊] 套用玩家設定檔失敗', error);
+                notify('無法套用玩家設定檔。', 'error');
+            }
+            break;
+        case 'delete-player-profile': {
+            const avatarId = actionElement.dataset.playerAvatar || '';
+            const name = context.powerUserSettings?.personas?.[avatarId] || '未命名玩家';
+            openConfirmDialog('刪除玩家設定檔', '確定刪除「' + name + '」？玩家頭像與 Persona 資料會一併移除，但既有聊天訊息不會刪除。', async () => {
+                try {
+                    await deletePlayerProfile(avatarId);
+                    notify('玩家設定檔已刪除。');
+                    await openPlayerProfilesPanel();
+                } catch (error) {
+                    console.error('[墨藍藝廊] 刪除玩家設定檔失敗', error);
+                    notify('玩家設定檔刪除失敗。', 'error');
+                }
+                return false;
+            });
+            break;
+        }
         case 'refresh-character-overview': await context.getCharacters(); openCharacterOverview(characterCarouselIndex, false); break;
         case 'toggle-character-flip':
             if (Date.now() < characterSwipeIgnoreUntil || characterCarouselTransitioning) break;
@@ -2559,6 +2873,9 @@ function subscribeToSillyTavern() {
     subscribe(events.CHARACTER_EDITED, refreshWithList);
     subscribe(events.CHARACTER_DELETED, refreshWithList);
     subscribe(events.PERSONA_CHANGED, refresh);
+    subscribe(events.PERSONA_CREATED, refresh);
+    subscribe(events.PERSONA_UPDATED, refresh);
+    subscribe(events.PERSONA_DELETED, refresh);
     subscribe(events.MESSAGE_SENT, async () => {
         try { await recordUserMessage(); } catch (error) { console.error('[墨藍藝廊] 記錄訊息次數失敗', error); }
         refreshMessages();
