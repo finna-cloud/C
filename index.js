@@ -822,6 +822,42 @@ async function loadChatEntries() {
     }
 }
 
+async function ensureGroupChatStartsBlank(context, groupId, chatId) {
+    const id = String(chatId || '').trim();
+    if (!id) throw new Error('Group chat id is required');
+    const existingResponse = await fetch('/api/chats/group/get', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify({ id }),
+    });
+    if (!existingResponse.ok && existingResponse.status !== 404) {
+        throw new Error('Group chat lookup failed: ' + existingResponse.status);
+    }
+    if (existingResponse.ok) {
+        const existing = await existingResponse.json();
+        if (!Array.isArray(existing)) throw new Error('Invalid group chat response');
+        if (existing.length) return false;
+    }
+    const integrity = globalThis.crypto?.randomUUID?.()
+        || 'molan-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    const chatHeader = {
+        chat_metadata: {
+            integrity,
+            molan_gallery_blank_group: true,
+            molan_gallery_group_id: String(groupId || ''),
+        },
+        user_name: 'unused',
+        character_name: 'unused',
+    };
+    const saveResponse = await fetch('/api/chats/group/save', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify({ id, chat: [chatHeader], force: false }),
+    });
+    if (!saveResponse.ok) throw new Error('Blank group chat save failed: ' + saveResponse.status);
+    return true;
+}
+
 async function selectChatEntry(type, entityId, chatId) {
     const context = getContext();
     if (!context) return;
@@ -829,6 +865,7 @@ async function selectChatEntry(type, entityId, chatId) {
     try {
         if (type === 'group') {
             const api = await getGroupApi();
+            await ensureGroupChatStartsBlank(context, entityId, chatId);
             await api.openGroupChat(entityId, chatId);
         } else {
             if (String(context.characterId) !== String(entityId)) {
@@ -1298,6 +1335,7 @@ async function selectEntity(type, id) {
                 notify('這個群組尚未有可開啟的對話。', 'warning');
                 return;
             }
+            await ensureGroupChatStartsBlank(context, group.id, group.chat_id);
             await context.openGroupChat(group.id, group.chat_id);
         } else {
             await context.selectCharacterById(Number(id), { switchMenu: false });
@@ -1453,6 +1491,7 @@ async function createNativeGroup(name, members, activationStrategy) {
     if (!response.ok) throw new Error('Group create failed: ' + response.status);
     const data = await response.json();
     if (!data?.id) throw new Error('Group create response did not include an id');
+    await ensureGroupChatStartsBlank(context, data.id, chatName);
     const api = await getGroupApi();
     await api.getGroups?.();
     await context.openGroupChat(String(data.id), chatName);
@@ -1535,7 +1574,7 @@ async function openGroupEditorDialog(group = null) {
                 notify('群組成員與回覆方式已更新。');
             } else {
                 await createNativeGroup(name, members, activationStrategy);
-                notify('群組已建立，可直接開始聊天。');
+                notify('群組已建立；聊天室保持空白，請傳送第一則訊息開始聊天。');
             }
         } catch (error) {
             console.error('[墨藍藝廊] 群組儲存失敗', error);
