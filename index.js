@@ -1551,6 +1551,140 @@ function applyModelSelection(value) {
     refreshDetail();
 }
 
+function getChatCompletionPresetManager() {
+    const context = getContext();
+    try {
+        return context?.getPresetManager?.('openai') || null;
+    } catch (error) {
+        console.error('[墨藍藝廊] 讀取聊天補全預設管理器失敗', error);
+        return null;
+    }
+}
+
+function chatCompletionPresetData(manager, name, useLiveSettings = false) {
+    const source = useLiveSettings
+        ? manager?.getPresetSettings?.(name)
+        : manager?.getCompletionPresetByName?.(name);
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    return structuredClone(source);
+}
+
+async function saveAndSelectChatCompletionPreset(manager, name, preset) {
+    await manager.savePreset(name, preset);
+    const value = manager.findPreset(name);
+    if (value !== undefined && value !== null) manager.selectPreset(value);
+}
+
+async function openChatCompletionPresetsPanel() {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    const manager = getChatCompletionPresetManager();
+    if (!manager) {
+        layer.innerHTML = '<div class="mol-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHAT COMPLETION</p><h3>無法讀取預設設定檔</h3><p class="mol-dialog-copy">目前 SillyTavern 未提供聊天補全預設管理器。請確認版本與 API 設定後再試一次。</p><div class="mol-dialog-actions"><button data-action="generation-settings">返回生成中心</button></div></div>';
+        layer.hidden = false;
+        return;
+    }
+    const names = manager.getAllPresets?.() || [];
+    const selectedName = String(manager.getSelectedPresetName?.() || '');
+    const rows = names.length ? names.map((name, index) => {
+        const current = name === selectedName;
+        return [
+            '<article class="mol-preset-card' + (current ? ' active' : '') + '">',
+            '<span class="mol-preset-number">' + String(index + 1).padStart(2, '0') + '</span>',
+            '<span class="mol-preset-copy"><strong>' + escapeHtml(name) + '</strong><small>Chat Completion 預設</small>' + (current ? '<em><i class="fa-solid fa-check"></i> 目前使用</em>' : '') + '</span>',
+            '<button data-action="select-chat-preset" data-preset-name="' + escapeHtml(name) + '"' + (current ? ' disabled' : '') + '>' + (current ? '已套用' : '切換') + '</button>',
+            '<button data-action="export-chat-preset" data-preset-name="' + escapeHtml(name) + '">匯出</button>',
+            '</article>',
+        ].join('');
+    }).join('') : '<div class="mol-profile-empty"><i class="fa-solid fa-sliders"></i><strong>尚無聊天補全預設</strong><span>可從目前生成參數建立第一份設定檔，或匯入 JSON。</span></div>';
+    layer.innerHTML = [
+        '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHAT COMPLETION PRESETS</p><h3>聊天補全預設設定檔</h3>',
+        '<div class="mol-panel-toolbar"><button class="primary" data-action="new-chat-preset"><i class="fa-solid fa-plus"></i> 新增設定檔</button><button data-action="import-chat-preset"><i class="fa-solid fa-file-import"></i> 匯入 JSON</button><button data-action="refresh-chat-presets"><i class="fa-solid fa-rotate"></i> 重新整理</button></div>',
+        '<input id="mol-chat-preset-import" type="file" accept=".json,application/json" hidden>',
+        '<p class="mol-dialog-copy">切換會同步套用至 SillyTavern 原生 Chat Completion。新增會複製目前完整生成參數；匯入與匯出會保留取樣器、Token、串流、推理及 Prompt Manager 等 JSON 欄位。</p>',
+        '<div class="mol-preset-list">' + rows + '</div>',
+        '<div class="mol-dialog-actions"><button data-action="generation-settings">返回生成中心</button></div></div>',
+    ].join('');
+    layer.hidden = false;
+    const input = layer.querySelector('#mol-chat-preset-import');
+    const onImport = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+            const parsed = JSON.parse(await file.text());
+            const source = parsed?.openai || parsed?.preset || parsed;
+            if (!source || typeof source !== 'object' || Array.isArray(source)) throw new Error('Invalid preset JSON');
+            const fallbackName = file.name.replace(/\.json$/i, '').trim();
+            const name = String(source.preset_name || source.name || fallbackName || '').trim();
+            if (!name) throw new Error('Missing preset name');
+            const preset = structuredClone(source);
+            preset.preset_name = name;
+            const existing = names.find((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase());
+            const commit = async () => {
+                try {
+                    await saveAndSelectChatCompletionPreset(manager, existing || name, preset);
+                    notify('聊天補全預設「' + (existing || name) + '」已匯入並套用。');
+                    await openChatCompletionPresetsPanel();
+                } catch (error) {
+                    console.error('[墨藍藝廊] 儲存匯入的聊天補全預設失敗', error);
+                    notify('預設匯入失敗，請檢查 SillyTavern 連線後重試。', 'error');
+                }
+                return false;
+            };
+            if (existing) {
+                openConfirmDialog('覆蓋聊天補全預設', '已存在「' + existing + '」。是否以匯入檔完整覆蓋並立即套用？', commit);
+            } else {
+                await commit();
+            }
+        } catch (error) {
+            console.error('[墨藍藝廊] 匯入聊天補全預設失敗', error);
+            notify('匯入失敗：請選擇有效的聊天補全預設 JSON。', 'error');
+        } finally {
+            input.value = '';
+        }
+    };
+    input.addEventListener('change', onImport);
+    activeDialogCleanup = () => input.removeEventListener('change', onImport);
+}
+
+function openNewChatCompletionPresetDialog() {
+    const manager = getChatCompletionPresetManager();
+    if (!manager) {
+        notify('目前無法讀取聊天補全預設。', 'error');
+        return;
+    }
+    const selectedName = String(manager.getSelectedPresetName?.() || '');
+    openTextDialog({
+        title: '新增聊天補全預設',
+        label: '設定檔名稱',
+        value: selectedName ? selectedName + ' 副本' : '',
+        submitText: '建立並套用',
+        onSubmit: async (value) => {
+            const name = value.trim();
+            if (!name) { notify('請輸入設定檔名稱。', 'warning'); return false; }
+            const names = manager.getAllPresets?.() || [];
+            if (names.some((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+                notify('已有同名聊天補全預設，請使用其他名稱。', 'warning');
+                return false;
+            }
+            const preset = chatCompletionPresetData(manager, selectedName, true);
+            if (!preset) { notify('無法取得目前生成參數。', 'error'); return false; }
+            preset.preset_name = name;
+            try {
+                await saveAndSelectChatCompletionPreset(manager, name, preset);
+                notify('聊天補全預設「' + name + '」已建立並套用。');
+                await openChatCompletionPresetsPanel();
+                return false;
+            } catch (error) {
+                console.error('[墨藍藝廊] 新增聊天補全預設失敗', error);
+                notify('設定檔建立失敗，請檢查 SillyTavern 連線後重試。', 'error');
+                return false;
+            }
+        },
+    });
+}
+
 async function openWorldInfoPanel() {
     closeDialog();
     const context = getContext();
@@ -2502,6 +2636,8 @@ function openInternalPanel(kind) {
         const modelOptions = modelSelect
             ? Array.from(modelSelect.options).map((option) => '<option value="' + escapeHtml(option.value) + '"' + (option.selected ? ' selected' : '') + '>' + escapeHtml(option.textContent?.trim() || option.value) + '</option>').join('')
             : '';
+        const presetManager = getChatCompletionPresetManager();
+        const presetName = String(presetManager?.getSelectedPresetName?.() || '尚未選擇');
         content = [
             '<label class="mol-model-picker"><span>目前模型</span>',
             modelSelect ? '<select id="mol-model-select">' + modelOptions + '</select>' : '<strong>' + escapeHtml(model) + '</strong><small>目前 API 沒有可選模型清單。</small>',
@@ -2512,6 +2648,7 @@ function openInternalPanel(kind) {
             '<div><span>CONTEXT</span><strong>' + escapeHtml(context.maxContext || '—') + '</strong></div>',
             '<div><span>STATUS</span><strong>' + (isBusy ? 'Generating' : 'Ready') + '</strong></div>',
             '</div>',
+            '<button class="mol-preset-entry" data-action="chat-presets"><span><strong>聊天補全預設設定檔</strong><small>' + escapeHtml(presetName) + '</small></span><i class="fa-solid fa-chevron-right"></i></button>',
             '<div class="mol-dialog-actions">',
             isBusy ? '<button class="primary" data-action="stop-generation">停止生成</button>' : '<button data-action="continue">續寫</button>',
             '<button data-action="usage-stats">查看 API 用量</button>',
@@ -2754,6 +2891,36 @@ async function handleRootClick(event) {
             await selectEntity('character', actionElement.dataset.characterId);
             break;
         case 'generation-settings': openInternalPanel('generation-settings'); break;
+        case 'chat-presets': await openChatCompletionPresetsPanel(); break;
+        case 'refresh-chat-presets': await openChatCompletionPresetsPanel(); break;
+        case 'new-chat-preset': openNewChatCompletionPresetDialog(); break;
+        case 'import-chat-preset': document.getElementById('mol-chat-preset-import')?.click(); break;
+        case 'select-chat-preset': {
+            const manager = getChatCompletionPresetManager();
+            const name = actionElement.dataset.presetName || '';
+            const value = manager?.findPreset?.(name);
+            if (!manager || value === undefined || value === null) {
+                notify('找不到指定的聊天補全預設。', 'error');
+                break;
+            }
+            manager.selectPreset(value);
+            notify('已切換聊天補全預設為「' + name + '」。');
+            await openChatCompletionPresetsPanel();
+            break;
+        }
+        case 'export-chat-preset': {
+            const manager = getChatCompletionPresetManager();
+            const name = actionElement.dataset.presetName || String(manager?.getSelectedPresetName?.() || '');
+            const preset = chatCompletionPresetData(manager, name);
+            if (!preset) {
+                notify('無法讀取指定的聊天補全預設。', 'error');
+                break;
+            }
+            preset.preset_name = name;
+            downloadBlob(new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json;charset=utf-8' }), safeFilename(name, 'chat-completion-preset') + '.json');
+            notify('聊天補全預設「' + name + '」已匯出。');
+            break;
+        }
         case 'usage-stats': openUsagePanel(); break;
         case 'memory-summary': openMemorySummaryPanel(); break;
         case 'creator-widgets': openCreatorWidgetsPanel(); break;

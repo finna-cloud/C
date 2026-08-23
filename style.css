@@ -1367,6 +1367,93 @@ body.mol-gallery-open {
     background: var(--mol-blue);
 }
 
+.mol-preset-entry {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 14px 0 0;
+    padding: 13px 14px;
+    border: 1px solid var(--mol-line);
+    color: var(--mol-ink);
+    background: var(--mol-paper);
+    text-align: left;
+}
+
+.mol-preset-entry > span,
+.mol-preset-copy {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+}
+
+.mol-preset-entry small,
+.mol-preset-copy small {
+    overflow: hidden;
+    color: var(--mol-muted);
+    font-size: calc(9px * var(--mol-ui-scale));
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mol-preset-list {
+    display: grid;
+    gap: 9px;
+}
+
+.mol-preset-card {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 9px;
+    padding: 12px;
+    border: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+    transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.mol-preset-card:hover {
+    transform: translateY(-1px);
+}
+
+.mol-preset-card.active {
+    border-color: rgba(32, 75, 217, .6);
+    box-shadow: inset 3px 0 0 var(--mol-blue);
+}
+
+.mol-preset-number {
+    color: var(--mol-muted);
+    font-size: calc(9px * var(--mol-ui-scale));
+    letter-spacing: .12em;
+}
+
+.mol-preset-copy strong {
+    overflow-wrap: anywhere;
+    font: 500 calc(14px * var(--mol-ui-scale))/1.3 "Noto Serif TC", serif;
+}
+
+.mol-preset-copy em {
+    color: var(--mol-blue);
+    font-size: calc(8px * var(--mol-ui-scale));
+    font-style: normal;
+    letter-spacing: .06em;
+}
+
+.mol-preset-card > button {
+    padding: 8px 10px;
+    border: 1px solid var(--mol-line);
+    color: var(--mol-ink);
+    background: transparent;
+    font-size: calc(10px * var(--mol-ui-scale));
+}
+
+.mol-preset-card > button:disabled {
+    color: var(--mol-muted);
+    cursor: default;
+    opacity: .65;
+}
+
 .mol-dialog button.danger,
 .mol-world-books button.danger,
 .mol-world-entries button.danger,
@@ -2382,6 +2469,14 @@ body.mol-gallery-open {
 
     .mol-player-card > button:first-of-type {
         grid-column: 2 / -1;
+    }
+
+    .mol-preset-card {
+        grid-template-columns: 32px minmax(0, 1fr) auto;
+    }
+
+    .mol-preset-card > button:first-of-type {
+        grid-column: 2;
     }
 
     .mol-player-editor-layout {

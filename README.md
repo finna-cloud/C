@@ -38,6 +38,7 @@
 - 介面字體與聊天室訊息字體可分別調整，設定會保留於 SillyTavern
 - 所有設定、管理與確認介面會隨網頁及介面縮放同步調整，並依目前可見視窗保持置中；放大後超出高度時可在面板內捲動
 - 生成中心直接切換目前 API 可用模型
+- 聊天補全預設設定檔：直接連動 SillyTavern 原生 Chat Completion 預設，可切換、複製目前完整參數建立新設定檔、匯入 JSON 及匯出 JSON；保留取樣器、Token、串流、推理與 Prompt Manager 等欄位
 - API 實際輸入／回覆 Token、本次與累計用量統計
 - 真正送出的使用者訊息次數統計；Swipe、續寫與重新生成不會增加次數
 - 世界書、生成中心、使用者設定與更多操作皆在墨藍藝廊內顯示
@@ -53,6 +54,7 @@
 ## 資料與相容性
 
 - 對話及角色資料仍由 SillyTavern 儲存。
+- 聊天補全預設透過 SillyTavern 原生 Preset Manager 讀寫；匯入同名設定檔前會要求確認，避免無意覆蓋。
 - 玩家設定檔直接寫入 SillyTavern 原生 Persona 資料；刪除設定檔不會刪除既有聊天訊息。
 - 關係值、摘要設定與摘要內容寫入目前聊天室的 chatMetadata.molan_gallery；已儲存摘要會透過 extension prompt 提供給後續 AI 回覆。
 - 創作者小工具同樣保存在目前聊天室的 chatMetadata.molan_gallery，各聊天室互不共用；啟用時會將目前狀態與更新規則提供給模型。
