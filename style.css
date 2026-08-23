@@ -25,6 +25,7 @@ body.mol-gallery-open {
     display: grid;
     grid-template-columns: 72px 292px minmax(430px, 1fr) 294px;
     height: 100dvh;
+    min-height: 0;
     overflow: hidden;
     color: var(--mol-ink);
     background: var(--mol-paper);
@@ -327,6 +328,8 @@ body.mol-gallery-open {
     position: relative;
     display: grid;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     grid-template-rows: 70px 44px 1fr auto;
     background: var(--mol-light);
 }
@@ -437,8 +440,12 @@ body.mol-gallery-open {
 
 .mol-messages {
     z-index: 1;
+    height: 100%;
+    max-height: 100%;
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     padding: 10px clamp(28px, 6vw, 88px) 36px;
     scroll-behavior: smooth;
 }
@@ -563,6 +570,7 @@ body.mol-gallery-open {
 
 .mol-composer-wrap {
     z-index: 2;
+    min-height: 0;
     padding: 0 clamp(22px, 5vw, 68px) 18px;
     background: linear-gradient(transparent, var(--mol-light) 22%);
 }
@@ -622,6 +630,7 @@ body.mol-gallery-open {
 }
 
 .mol-detail {
+    min-height: 0;
     overflow-y: auto;
     padding: 22px;
     border-left: 1px solid var(--mol-line);
@@ -757,36 +766,6 @@ body.mol-gallery-open {
 .mol-stat-bar i {
     display: block;
     height: 100%;
-    background: var(--mol-blue);
-}
-
-.mol-tag-section {
-    margin-top: 18px;
-}
-
-.mol-tag-section > span {
-    display: block;
-    margin-bottom: 8px;
-    color: var(--mol-muted);
-    font-size: 9px;
-}
-
-.mol-tag-section > div {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-}
-
-.mol-tag-section button {
-    padding: 5px 9px;
-    border: 1px solid var(--mol-line);
-    background: transparent;
-    font-size: 9px;
-}
-
-.mol-tag-section button.active {
-    border-color: var(--mol-blue);
-    color: white !important;
     background: var(--mol-blue);
 }
 
@@ -984,6 +963,77 @@ body.mol-gallery-open {
     color: var(--mol-blue);
 }
 
+.mol-panel-dialog {
+    max-height: min(680px, calc(100dvh - 40px));
+    overflow-y: auto;
+}
+
+.mol-panel-list,
+.mol-info-grid,
+.mol-settings-list {
+    display: grid;
+    gap: 8px;
+}
+
+.mol-panel-list > div,
+.mol-info-grid > div,
+.mol-settings-list label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 12px;
+    border: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+}
+
+.mol-panel-list span,
+.mol-info-grid span {
+    color: var(--mol-blue);
+    font-size: 9px;
+    letter-spacing: .12em;
+}
+
+.mol-panel-list strong,
+.mol-info-grid strong {
+    overflow-wrap: anywhere;
+    font: 500 12px/1.4 "Noto Serif TC", serif;
+}
+
+.mol-info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mol-info-grid > div {
+    align-items: flex-start;
+    flex-direction: column;
+}
+
+.mol-settings-list label {
+    justify-content: space-between;
+    cursor: pointer;
+}
+
+.mol-settings-list label > span {
+    display: grid;
+    gap: 4px;
+}
+
+.mol-settings-list small,
+.mol-dialog-hint {
+    color: var(--mol-muted);
+    font-size: 9px;
+}
+
+.mol-settings-list input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--mol-blue);
+}
+
+.mol-dialog-hint {
+    margin: 16px 0 0;
+}
+
 .mol-toast {
     position: fixed;
     z-index: 12;
@@ -1061,7 +1111,8 @@ body.mol-gallery-open {
     }
 
     .mol-conversation {
-        min-height: 100dvh;
+        height: 100dvh;
+        min-height: 0;
         grid-column: 1;
         grid-template-rows: 64px 38px 1fr auto;
     }

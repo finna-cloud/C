@@ -104,12 +104,11 @@ function entityRole(entity) {
 }
 
 function getChatMeta(context = getContext()) {
-    const defaults = { relationship: 50, moods: ['克制'], memory: '' };
+    const defaults = { relationship: 50, memory: '' };
     const stored = context?.chatMetadata?.[MODULE_NAME];
     if (!stored || typeof stored !== 'object') return defaults;
     return {
         relationship: Number.isFinite(Number(stored.relationship)) ? Number(stored.relationship) : 50,
-        moods: Array.isArray(stored.moods) ? stored.moods : ['克制'],
         memory: typeof stored.memory === 'string' ? stored.memory : '',
     };
 }
@@ -173,13 +172,12 @@ function createRoot() {
         '  <div class="mol-profile-heading"><div><p class="mol-eyebrow">CHARACTER PROFILE</p><h2 id="mol-profile-name">—</h2></div><span id="mol-status" class="mol-status">OFFLINE</span></div>',
         '  <p id="mol-profile-note" class="mol-profile-note">選擇角色後顯示資料。</p>',
         '  <button class="mol-stat-row" data-action="relationship" title="調整關係值"><span>關係</span><span class="mol-stat-bar"><i id="mol-relationship-bar"></i></span><strong id="mol-relationship">50</strong></button>',
-        '  <div class="mol-tag-section"><span>當前情緒（點擊切換）</span><div id="mol-moods"></div></div>',
         '  <div class="mol-context-list">',
-        '    <button data-action="world-info"><span class="mol-context-icon"><i class="fa-solid fa-book-atlas"></i></span><span><strong>世界書</strong><small id="mol-world-count">開啟原生管理器</small></span><i class="fa-solid fa-chevron-right"></i></button>',
+        '    <button data-action="world-info"><span class="mol-context-icon"><i class="fa-solid fa-book-atlas"></i></span><span><strong>世界書</strong><small id="mol-world-count">在藝廊內查看</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="memory"><span class="mol-context-icon"><i class="fa-solid fa-leaf"></i></span><span><strong>重要記憶</strong><small id="mol-memory-summary">尚未記錄</small></span><i class="fa-solid fa-chevron-right"></i></button>',
-        '    <button data-action="generation-settings"><span class="mol-context-icon"><i class="fa-solid fa-sliders"></i></span><span><strong>生成設定</strong><small>開啟原生設定</small></span><i class="fa-solid fa-chevron-right"></i></button>',
+        '    <button data-action="generation-settings"><span class="mol-context-icon"><i class="fa-solid fa-sliders"></i></span><span><strong>生成中心</strong><small>模型、狀態與生成操作</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '  </div>',
-        '  <button class="mol-model-note" data-action="generation-settings" title="開啟生成設定"><span>MODEL / API</span><strong id="mol-model-name">—</strong><small id="mol-stream-state">Ready</small></button>',
+        '  <button class="mol-model-note" data-action="generation-settings" title="在藝廊內查看生成資訊"><span>MODEL / API</span><strong id="mol-model-name">—</strong><small id="mol-stream-state">Ready</small></button>',
         '</aside>',
         '<div id="mol-dialog" class="mol-dialog-layer" hidden></div>',
     ].join('');
@@ -416,16 +414,13 @@ function renderDetail() {
     document.getElementById('mol-relationship').textContent = String(meta.relationship);
     document.getElementById('mol-relationship-bar').style.width = Math.max(0, Math.min(100, meta.relationship)) + '%';
     document.getElementById('mol-memory-summary').textContent = meta.memory ? truncate(meta.memory, 28) : '尚未記錄';
-    const moodHost = document.getElementById('mol-moods');
-    const moods = ['克制', '試探', '警覺'];
-    moodHost.innerHTML = moods.map((mood) => '<button data-mood="' + mood + '" class="' + (meta.moods.includes(mood) ? 'active' : '') + '">' + mood + '</button>').join('');
     let model = context.mainApi || 'Unknown';
     try {
         model = context.getChatCompletionModel?.() || model;
     } catch { /* use API name */ }
     document.getElementById('mol-model-name').textContent = String(model);
     const names = context.getWorldInfoNames?.() || [];
-    document.getElementById('mol-world-count').textContent = names.length ? names.length + ' 本世界書可用' : '開啟原生管理器';
+    document.getElementById('mol-world-count').textContent = names.length ? names.length + ' 本世界書可用' : '目前沒有世界書';
 }
 
 async function updateTokenCount() {
@@ -474,15 +469,6 @@ async function selectEntity(type, id) {
         console.error('[墨藍藝廊] 切換對話失敗', error);
         notify('無法切換對話，請稍後再試。', 'error');
     }
-}
-
-function clickNative(selector) {
-    setOpen(false);
-    setTimeout(() => {
-        const target = document.querySelector(selector);
-        if (target instanceof HTMLElement) target.click();
-        else console.warn('[墨藍藝廊] 找不到原生控制項：', selector);
-    }, 80);
 }
 
 function closeDialog() {
@@ -555,10 +541,78 @@ function openMoreDialog() {
         '<div class="mol-dialog mol-action-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHAT ACTIONS</p><h3>對話選項</h3>',
         '<button data-action="rename-chat"><i class="fa-solid fa-pen"></i><span>重新命名對話</span></button>',
         '<button data-action="delete-last"><i class="fa-solid fa-trash"></i><span>刪除最後訊息</span></button>',
-        '<button data-action="native-options"><i class="fa-solid fa-arrow-up-right-from-square"></i><span>開啟原生更多選單</span></button>',
+        '<button data-action="user-settings"><i class="fa-solid fa-palette"></i><span>藝廊介面設定</span></button>',
         '</div>',
     ].join('');
     layer.hidden = false;
+}
+
+function openInternalPanel(kind) {
+    closeDialog();
+    const context = getContext();
+    const layer = document.getElementById('mol-dialog');
+    if (!context || !layer) return;
+    let title = '';
+    let eyebrow = 'MOLAN GALLERY';
+    let content = '';
+    if (kind === 'world-info') {
+        title = '世界書';
+        eyebrow = 'WORLD INFO';
+        const names = context.getWorldInfoNames?.() || [];
+        content = names.length
+            ? '<div class="mol-panel-list">' + names.map((name, index) => '<div><span>' + String(index + 1).padStart(2, '0') + '</span><strong>' + escapeHtml(name) + '</strong></div>').join('') + '</div>'
+            : '<p class="mol-dialog-copy">目前聊天室沒有可用的世界書。</p>';
+        content += '<div class="mol-dialog-actions"><button data-action="refresh-world-info">重新整理</button><button class="primary" data-action="close-dialog">完成</button></div>';
+    } else if (kind === 'generation-settings') {
+        title = '生成中心';
+        eyebrow = 'GENERATION';
+        let model = context.mainApi || 'Unknown';
+        try { model = context.getChatCompletionModel?.() || model; } catch { /* use API name */ }
+        content = [
+            '<div class="mol-info-grid">',
+            '<div><span>MODEL</span><strong>' + escapeHtml(model) + '</strong></div>',
+            '<div><span>API</span><strong>' + escapeHtml(context.mainApi || 'Unknown') + '</strong></div>',
+            '<div><span>CONTEXT</span><strong>' + escapeHtml(context.maxContext || '—') + '</strong></div>',
+            '<div><span>STATUS</span><strong>' + (isBusy ? 'Generating' : 'Ready') + '</strong></div>',
+            '</div>',
+            '<div class="mol-dialog-actions">',
+            isBusy ? '<button class="primary" data-action="stop-generation">停止生成</button>' : '<button data-action="continue">續寫</button>',
+            '<button data-action="close-dialog">關閉</button>',
+            '</div>',
+        ].join('');
+    } else {
+        title = '藝廊介面設定';
+        eyebrow = 'INTERFACE';
+        const settings = getSettings();
+        content = [
+            '<div class="mol-settings-list">',
+            '<label><span><strong>啟動時自動開啟</strong><small>進入 SillyTavern 後顯示墨藍藝廊</small></span><input name="autoOpen" type="checkbox"' + (settings.autoOpen ? ' checked' : '') + '></label>',
+            '<label><span><strong>緊湊訊息間距</strong><small>在同一畫面顯示更多訊息</small></span><input name="compactMessages" type="checkbox"' + (settings.compactMessages ? ' checked' : '') + '></label>',
+            '</div>',
+            '<p class="mol-dialog-hint">快捷鍵：Ctrl/Cmd + Shift + M</p>',
+            '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div>',
+        ].join('');
+    }
+    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog" title="關閉">×</button><p class="mol-eyebrow">' + eyebrow + '</p><h3>' + title + '</h3>' + content + '</div>';
+    layer.hidden = false;
+    if (kind === 'user-settings') {
+        const settings = getSettings();
+        const autoOpen = layer.querySelector('input[name="autoOpen"]');
+        const compact = layer.querySelector('input[name="compactMessages"]');
+        const save = () => context.saveSettingsDebounced();
+        const onAutoOpen = () => { settings.autoOpen = autoOpen.checked; save(); };
+        const onCompact = () => {
+            settings.compactMessages = compact.checked;
+            document.getElementById(ROOT_ID)?.classList.toggle('compact-messages', settings.compactMessages);
+            save();
+        };
+        autoOpen.addEventListener('change', onAutoOpen);
+        compact.addEventListener('change', onCompact);
+        activeDialogCleanup = () => {
+            autoOpen.removeEventListener('change', onAutoOpen);
+            compact.removeEventListener('change', onCompact);
+        };
+    }
 }
 
 async function executeNewChat() {
@@ -642,15 +696,6 @@ async function handleRootClick(event) {
         await selectEntity(entity.dataset.entityType, entity.dataset.entityId);
         return;
     }
-    const mood = event.target.closest('[data-mood]');
-    if (mood) {
-        const meta = getChatMeta();
-        const moods = meta.moods.includes(mood.dataset.mood)
-            ? meta.moods.filter((item) => item !== mood.dataset.mood)
-            : [...meta.moods, mood.dataset.mood];
-        await saveChatMeta({ moods });
-        return;
-    }
     const actionElement = event.target.closest('[data-action]');
     const action = actionElement?.dataset.action;
     if (!action) return;
@@ -661,12 +706,13 @@ async function handleRootClick(event) {
         case 'mobile-menu': sidebarOpen = !sidebarOpen; renderHeader(); break;
         case 'toggle-detail': detailOpen = !detailOpen; renderHeader(); break;
         case 'focus': focusMode = !focusMode; renderHeader(); break;
-        case 'world-info': clickNative('#WIDrawerIcon'); break;
-        case 'generation-settings': clickNative('#leftNavDrawerIcon'); break;
-        case 'user-settings': clickNative('#user-settings-button .drawer-toggle'); break;
-        case 'native-options': clickNative('#options_button'); break;
+        case 'world-info': openInternalPanel('world-info'); break;
+        case 'refresh-world-info': openInternalPanel('world-info'); break;
+        case 'generation-settings': openInternalPanel('generation-settings'); break;
+        case 'user-settings': openInternalPanel('user-settings'); break;
+        case 'stop-generation': context.stopGeneration(); closeDialog(); break;
         case 'new-chat': await executeNewChat(); break;
-        case 'continue': await continueGeneration(); break;
+        case 'continue': closeDialog(); await continueGeneration(); break;
         case 'more': openMoreDialog(); break;
         case 'close-dialog': closeDialog(); break;
         case 'relationship': openRelationshipDialog(); break;
