@@ -37,6 +37,9 @@
 - 世界書、生成中心、使用者設定與更多操作皆在墨藍藝廊內顯示
 - 每個聊天室獨立保存關係值與記憶摘要
 - 記憶自動摘要：自訂提供給 AI 的摘要要求、輸出格式與觸發訊息數；AI 產生後可人工修改並作為後續系統記憶
+- 創作者小工具：每個聊天室可各自新增、修改、預覽、套用、停用、刪除、匯入及匯出互動式狀態介面
+- 小工具可由 AI 依自然語言需求製作，也可手動編輯狀態值、AI 更新指示、安全 HTML 模板與互動動作 JSON
+- 小工具動作支援送出訊息、執行 Slash Command、增加／減少／設定／切換狀態；可選擇在每次角色回覆後由 AI 自動更新狀態
 - 聊天訊息區可獨立上下滑動，不影響輸入框與導覽列
 - 桌機與手機版面
 - Ctrl/Cmd + Shift + M 快速開關；Esc 關閉
@@ -45,6 +48,8 @@
 
 - 對話及角色資料仍由 SillyTavern 儲存。
 - 關係值、摘要設定與摘要內容寫入目前聊天室的 chatMetadata.molan_gallery；已儲存摘要會透過 extension prompt 提供給後續 AI 回覆。
+- 創作者小工具同樣保存在目前聊天室的 chatMetadata.molan_gallery，各聊天室互不共用；啟用時會將目前狀態與更新規則提供給模型。
+- 小工具 HTML 會經過 DOMPurify 處理；不執行 script、iframe、外部連結、圖片來源或行內事件。互動行為必須使用小工具的動作 JSON 定義。
 - 目前聊天用量寫入 chatMetadata.molan_gallery；全部累計寫入 extensionSettings.molan_gallery。
 - Token 只採計 API 供應商回傳的 usage／usageMetadata；供應商未回傳時顯示「未提供」，不以估算值冒充實際用量。
 - 關閉擴充後，原生 SillyTavern 介面仍可正常使用。

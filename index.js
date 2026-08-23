@@ -20,6 +20,32 @@ const DEFAULT_MEMORY = Object.freeze({
     lastSummarizedCount: 0,
     updatedAt: 0,
 });
+const DEFAULT_WIDGET = Object.freeze({
+    id: '',
+    name: '聊天室狀態',
+    enabled: true,
+    autoUpdate: false,
+    theme: 'blue',
+    instruction: '依照最新對話更新所有狀態值。不得虛構未發生的事件；無法判斷時保留原值。',
+    template: '<div class="widget-title">墨藍狀態欄</div><div class="widget-grid">📅 日期：{{日期}}<br>📍 地點：{{地點}}<br>💙 關係：{{關係}}<br>✨ 好感度：{{好感度}}</div><div class="widget-actions">{{action:advance}}</div>',
+    states: [
+        { key: '日期', label: '日期', value: '未設定', type: 'text', instruction: '目前對話中的日期。' },
+        { key: '地點', label: '地點', value: '未設定', type: 'text', instruction: '目前所在位置。' },
+        { key: '關係', label: '關係', value: '初識', type: 'text', instruction: '{{char}} 與 {{user}} 目前的關係。' },
+        { key: '好感度', label: '好感度', value: 50, type: 'progress', min: 0, max: 100, instruction: '{{char}} 對 {{user}} 的好感度，0 到 100。' },
+    ],
+    actions: [
+        { id: 'advance', label: '推進劇情', type: 'send', payload: '繼續推進目前的情節。', key: '' },
+    ],
+    lastUpdatedMessageCount: 0,
+});
+const WIDGET_PRESETS = Object.freeze({
+    blue: DEFAULT_WIDGET.template,
+    pastel: '<div class="widget-title">今日校園</div><div class="widget-grid">星期｜{{星期}}　節次｜{{節次}}<br>天氣｜{{天氣}}　心情｜{{心情}}<br>親密度｜{{親密度}}</div><div class="widget-actions">{{action:talk}} {{action:explore}}</div>',
+    dark: '<div class="widget-title">CASE FILE</div><div class="widget-grid">事件｜{{事件編號}}　線索｜{{線索數量}}<br>位置｜{{地點}}　懷疑｜{{懷疑值}}</div><div class="widget-actions">{{action:investigate}}</div>',
+    rpg: '<div class="widget-title">ADVENTURE LOG</div><div class="widget-grid">📍 {{地點}} · {{時段}}<br>HP｜{{HP}}　MP｜{{MP}}　金額｜{{金額}}<br>夥伴等級｜{{夥伴等級}}</div><div class="widget-actions">{{action:rest}} {{action:move}}</div>',
+    minimal: '<div class="widget-title">CURRENT SCENE</div><div class="widget-grid">{{日期}} · {{天氣}}<br>{{角色狀態}}<br>氛圍｜{{氛圍}}</div>',
+});
 const DEFAULT_SETTINGS = Object.freeze({
     autoOpen: false,
     compactMessages: false,
@@ -43,6 +69,7 @@ let chatEntries = [];
 let chatListLoading = false;
 let chatListRequest = 0;
 let summaryRunning = false;
+let widgetUpdateRunning = false;
 let currentGeneration = { type: '', chatId: '', startedAt: 0 };
 let nativeFetch = null;
 let fetchWrapper = null;
@@ -93,6 +120,51 @@ function normalizeMemory(value, legacy = '') {
         lastSummarizedCount: Math.max(0, Number(source.lastSummarizedCount) || 0),
         updatedAt: Math.max(0, Number(source.updatedAt) || 0),
     };
+}
+
+function normalizeWidget(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const id = String(source.id || ('widget-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7)));
+    const states = Array.isArray(source.states) ? source.states.slice(0, 30).map((state, index) => {
+        const item = state && typeof state === 'object' ? state : {};
+        const key = String(item.key || item.label || ('狀態' + (index + 1))).trim().slice(0, 40);
+        const type = ['text', 'number', 'progress', 'toggle'].includes(item.type) ? item.type : 'text';
+        return {
+            key,
+            label: String(item.label || key).trim().slice(0, 60),
+            value: ['number', 'progress'].includes(type) ? (Number.isFinite(Number(item.value)) ? Number(item.value) : 0) : (type === 'toggle' ? Boolean(item.value) : String(item.value ?? '')),
+            type,
+            min: Number.isFinite(Number(item.min)) ? Number(item.min) : 0,
+            max: Number.isFinite(Number(item.max)) ? Number(item.max) : 100,
+            instruction: String(item.instruction || '').trim().slice(0, 1000),
+        };
+    }).filter((state) => state.key) : structuredClone(DEFAULT_WIDGET.states);
+    const actions = Array.isArray(source.actions) ? source.actions.slice(0, 20).map((action, index) => {
+        const item = action && typeof action === 'object' ? action : {};
+        return {
+            id: String(item.id || ('action-' + (index + 1))).trim().replace(/[<>"']/g, '-').slice(0, 40),
+            label: String(item.label || ('動作 ' + (index + 1))).trim().slice(0, 60),
+            type: ['send', 'command', 'increment', 'decrement', 'set', 'toggle'].includes(item.type) ? item.type : 'send',
+            payload: String(item.payload ?? '').slice(0, 2000),
+            key: String(item.key || '').trim().slice(0, 40),
+        };
+    }).filter((action) => action.id && action.label) : structuredClone(DEFAULT_WIDGET.actions);
+    return {
+        id,
+        name: String(source.name || DEFAULT_WIDGET.name).trim().slice(0, 80),
+        enabled: source.enabled !== false,
+        autoUpdate: Boolean(source.autoUpdate),
+        theme: ['blue', 'pastel', 'dark', 'rpg', 'minimal'].includes(source.theme) ? source.theme : 'blue',
+        instruction: String(source.instruction || DEFAULT_WIDGET.instruction).trim().slice(0, 6000),
+        template: String(source.template || WIDGET_PRESETS.blue).slice(0, 30000),
+        states,
+        actions,
+        lastUpdatedMessageCount: Math.max(0, Number(source.lastUpdatedMessageCount) || 0),
+    };
+}
+
+function normalizeWidgets(value) {
+    return Array.isArray(value) ? value.slice(0, 20).map(normalizeWidget) : [];
 }
 
 function escapeHtml(value) {
@@ -161,7 +233,7 @@ function entityRole(entity) {
 }
 
 function getChatMeta(context = getContext()) {
-    const defaults = { relationship: 50, memory: '', memorySummary: structuredClone(DEFAULT_MEMORY), usage: structuredClone(EMPTY_USAGE) };
+    const defaults = { relationship: 50, memory: '', memorySummary: structuredClone(DEFAULT_MEMORY), usage: structuredClone(EMPTY_USAGE), creatorWidgets: [], activeWidgetId: '' };
     const stored = context?.chatMetadata?.[MODULE_NAME];
     if (!stored || typeof stored !== 'object') return defaults;
     return {
@@ -169,6 +241,8 @@ function getChatMeta(context = getContext()) {
         memory: typeof stored.memory === 'string' ? stored.memory : '',
         memorySummary: normalizeMemory(stored.memorySummary, stored.memory),
         usage: normalizeUsage(stored.usage),
+        creatorWidgets: normalizeWidgets(stored.creatorWidgets),
+        activeWidgetId: typeof stored.activeWidgetId === 'string' ? stored.activeWidgetId : '',
     };
 }
 
@@ -350,6 +424,11 @@ function applyMemoryInjection() {
         ? '以下是使用者確認過、供後續對話參考的長期記憶。若與最新對話衝突，以最新對話為準。\n\n' + memory.content.trim()
         : '';
     context.setExtensionPrompt('molan_gallery_memory_summary', value, 0, 0, false, 0);
+    const widget = activeCreatorWidget(getChatMeta(context));
+    const widgetValue = widget
+        ? '目前聊天室套用了互動式狀態小工具「' + widget.name + '」。請在回覆時遵守以下狀態規則，但不要在正文輸出 HTML、JSON 或狀態欄。\n\n規則：' + widget.instruction + '\n\n目前狀態：\n' + JSON.stringify(Object.fromEntries(widget.states.map((state) => [state.key, state.value])))
+        : '';
+    context.setExtensionPrompt('molan_gallery_creator_widget', widgetValue, 0, 0, false, 0);
 }
 
 function downloadBlob(blob, filename) {
@@ -459,6 +538,7 @@ function createRoot() {
         '    <button class="mol-rail-button active" data-action="show-chats" title="對話"><i class="fa-solid fa-pen-nib"></i></button>',
         '    <button class="mol-rail-button" data-action="character-overview" title="角色總覽"><i class="fa-solid fa-address-card"></i></button>',
         '    <button class="mol-rail-button" data-action="world-info" title="世界書"><i class="fa-solid fa-book-atlas"></i></button>',
+        '    <button class="mol-rail-button" data-action="creator-widgets" title="創作者小工具"><i class="fa-solid fa-screwdriver-wrench"></i></button>',
         '    <button class="mol-rail-button" data-action="continue" title="續寫"><i class="fa-solid fa-wand-magic-sparkles"></i></button>',
         '  </nav>',
         '  <div class="mol-rail-bottom"><button class="mol-profile-dot" data-action="user-settings" title="使用者設定">U</button></div>',
@@ -502,6 +582,7 @@ function createRoot() {
         '  <div class="mol-context-list">',
         '    <button data-action="world-info"><span class="mol-context-icon"><i class="fa-solid fa-book-atlas"></i></span><span><strong>世界書</strong><small id="mol-world-count">在藝廊內查看</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="memory-summary"><span class="mol-context-icon"><i class="fa-solid fa-leaf"></i></span><span><strong>記憶自動摘要</strong><small id="mol-memory-summary">尚未建立摘要</small></span><i class="fa-solid fa-chevron-right"></i></button>',
+        '    <button data-action="creator-widgets"><span class="mol-context-icon"><i class="fa-solid fa-screwdriver-wrench"></i></span><span><strong>創作者小工具</strong><small id="mol-widget-summary">目前聊天室尚未套用</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="generation-settings"><span class="mol-context-icon"><i class="fa-solid fa-sliders"></i></span><span><strong>生成中心</strong><small>模型、狀態與生成操作</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="usage-stats"><span class="mol-context-icon"><i class="fa-solid fa-chart-simple"></i></span><span><strong>API 用量</strong><small id="mol-usage-summary">等待實際回傳</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '  </div>',
@@ -661,17 +742,70 @@ function formattedMessage(message, index, context) {
     }
 }
 
+function activeCreatorWidget(meta = getChatMeta()) {
+    const widget = meta.creatorWidgets.find((item) => item.id === meta.activeWidgetId);
+    return widget?.enabled ? widget : null;
+}
+
+function renderWidgetValue(state) {
+    const value = escapeHtml(state.value);
+    if (state.type === 'progress') {
+        const min = Number(state.min || 0);
+        const max = Number(state.max || 100);
+        const current = Number(state.value || 0);
+        const percent = Math.max(0, Math.min(100, ((current - min) / Math.max(1, max - min)) * 100));
+        return '<span class="mol-widget-progress"><strong>' + value + '</strong><i><b style="width:' + percent + '%"></b></i></span>';
+    }
+    if (state.type === 'toggle') return '<span class="mol-widget-toggle-value">' + (state.value ? 'ON' : 'OFF') + '</span>';
+    return '<span class="mol-widget-value">' + value + '</span>';
+}
+
+function renderCreatorWidgetMarkup(widget = activeCreatorWidget()) {
+    if (!widget) return '';
+    const purifier = globalThis.SillyTavern?.libs?.DOMPurify;
+    let html = String(widget.template || WIDGET_PRESETS[widget.theme] || WIDGET_PRESETS.blue)
+        .replace(/url\s*\(/gi, 'blocked(')
+        .replace(/@import\s+[^;]+;?/gi, '')
+        .replace(/position\s*:\s*(fixed|sticky)/gi, 'position:relative')
+        .replace(/z-index\s*:\s*[^;"']+;?/gi, '')
+        .replace(/\bmol-[\w-]+/gi, 'widget-safe');
+    html = purifier?.sanitize?.(html, { ALLOW_DATA_ATTR: false, FORBID_TAGS: ['script', 'style', 'link', 'meta', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'option'], FORBID_ATTR: ['id', 'src', 'srcset', 'href', 'formaction'] }) ?? escapeHtml(html);
+    const usedStates = new Set();
+    for (const state of widget.states) {
+        const token = '{{' + state.key + '}}';
+        if (html.includes(token)) {
+            usedStates.add(state.key);
+            html = html.split(token).join('<span class="mol-widget-state" title="' + escapeHtml(state.label) + '">' + renderWidgetValue(state) + '</span>');
+        }
+    }
+    const usedActions = new Set();
+    html = html.replace(/\{\{action:([^}]+)\}\}/g, (_match, id) => {
+        const action = widget.actions.find((item) => item.id === String(id).trim());
+        if (!action) return '';
+        usedActions.add(action.id);
+        return '<button type="button" class="mol-widget-action" data-action="widget-run" data-widget-action-id="' + escapeHtml(action.id) + '">' + escapeHtml(action.label) + '</button>';
+    });
+    html = purifier?.sanitize?.(html, { FORBID_TAGS: ['script', 'style', 'link', 'meta', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'option'], FORBID_ATTR: ['id', 'src', 'srcset', 'href', 'formaction'] }) ?? html;
+    const remainingStates = widget.states.filter((state) => !usedStates.has(state.key));
+    const remainingActions = widget.actions.filter((action) => !usedActions.has(action.id));
+    const stateGrid = remainingStates.length ? '<div class="mol-widget-default-grid">' + remainingStates.map((state) => '<div><span>' + escapeHtml(state.label) + '</span>' + renderWidgetValue(state) + '</div>').join('') + '</div>' : '';
+    const actions = remainingActions.length ? '<div class="mol-widget-default-actions">' + remainingActions.map((action) => '<button type="button" class="mol-widget-action" data-action="widget-run" data-widget-action-id="' + escapeHtml(action.id) + '">' + escapeHtml(action.label) + '</button>').join('') + '</div>' : '';
+    return '<section class="mol-creator-widget theme-' + escapeHtml(widget.theme) + '" data-widget-id="' + escapeHtml(widget.id) + '"><div class="mol-widget-toolbar"><span>CREATOR WIDGET · ' + escapeHtml(widget.name) + '</span><button type="button" data-action="creator-widgets" title="編輯創作者小工具"><i class="fa-solid fa-pen"></i></button></div><div class="mol-widget-content">' + html + stateGrid + actions + '</div></section>';
+}
+
 function renderMessages({ preserveScroll = false } = {}) {
     const context = getContext();
     const host = document.getElementById('mol-messages');
     if (!context || !host) return;
     const wasNearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 120;
+    const widget = renderCreatorWidgetMarkup();
     if (!context.chat?.length) {
-        host.innerHTML = '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
+        host.innerHTML = widget + '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
         return;
     }
     const entity = currentEntity(context);
     host.innerHTML = [
+        widget,
         '<div class="mol-scene"><span>' + escapeHtml(context.chat.length) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p></div>',
         context.chat.map((message, index) => {
             const side = message.is_user ? ' user' : (message.is_system ? ' system' : ' character');
@@ -735,6 +869,9 @@ function renderDetail() {
     document.getElementById('mol-memory-summary').textContent = meta.memorySummary.content
         ? truncate(meta.memorySummary.content, 28)
         : (meta.memorySummary.enabled ? '已啟用，等待摘要' : '尚未建立摘要');
+    const widgetSummary = document.getElementById('mol-widget-summary');
+    const widget = activeCreatorWidget(meta);
+    if (widgetSummary) widgetSummary.textContent = widget ? widget.name + (widget.autoUpdate ? ' · AI 自動更新' : '') : '目前聊天室尚未套用';
     let model = context.mainApi || 'Unknown';
     try {
         model = context.getChatCompletionModel?.() || model;
@@ -872,6 +1009,7 @@ function openMoreDialog() {
         '<button data-action="rename-chat"><i class="fa-solid fa-pen"></i><span>重新命名對話</span></button>',
         '<button data-action="export-current-chat"><i class="fa-solid fa-file-arrow-down"></i><span>匯出對話 TXT</span></button>',
         '<button data-action="memory-summary"><i class="fa-solid fa-brain"></i><span>記憶自動摘要</span></button>',
+        '<button data-action="creator-widgets"><i class="fa-solid fa-screwdriver-wrench"></i><span>創作者小工具</span></button>',
         '<button data-action="delete-last"><i class="fa-solid fa-trash"></i><span>刪除最後訊息</span></button>',
         '<button data-action="delete-chat" class="danger"><i class="fa-solid fa-trash-can"></i><span>刪除目前聊天室</span></button>',
         '<button data-action="user-settings"><i class="fa-solid fa-palette"></i><span>藝廊介面設定</span></button>',
@@ -1303,6 +1441,267 @@ async function maybeAutoSummarize() {
     try { await generateMemorySummary({ force: false }); } catch (error) { console.error('[墨藍藝廊] 自動摘要失敗', error); }
 }
 
+async function saveCreatorWidgets(widgets, activeWidgetId = '') {
+    const normalized = normalizeWidgets(widgets);
+    const active = normalized.some((item) => item.id === activeWidgetId) ? activeWidgetId : '';
+    await saveChatMeta({ creatorWidgets: normalized, activeWidgetId: active });
+    refreshAll();
+}
+
+function widgetJsonFromForm(form, base = {}) {
+    const values = new FormData(form);
+    let states;
+    let actions;
+    try { states = JSON.parse(String(values.get('states') || '[]')); } catch { throw new Error('狀態值 JSON 格式錯誤。'); }
+    try { actions = JSON.parse(String(values.get('actions') || '[]')); } catch { throw new Error('互動動作 JSON 格式錯誤。'); }
+    if (!Array.isArray(states) || !Array.isArray(actions)) throw new Error('狀態值與互動動作必須使用 JSON 陣列。');
+    return normalizeWidget({
+        ...base,
+        name: String(values.get('name') || '').trim(),
+        enabled: values.get('enabled') === 'on',
+        autoUpdate: values.get('autoUpdate') === 'on',
+        theme: String(values.get('theme') || 'blue'),
+        instruction: String(values.get('instruction') || '').trim(),
+        template: String(values.get('template') || ''),
+        states,
+        actions,
+    });
+}
+
+function extractJsonObject(value) {
+    const text = String(value || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error('AI 未回傳可讀取的 JSON。');
+    return JSON.parse(text.slice(start, end + 1));
+}
+
+async function createWidgetWithAI(description, current) {
+    const context = getContext();
+    if (!context?.generateQuietPrompt) throw new Error('目前 SillyTavern 版本不支援背景生成。');
+    const prompt = [
+        '你是 SillyTavern 聊天室狀態小工具設計師。請依需求輸出一個 JSON 物件，不要輸出說明或 Markdown。',
+        '使用者需求：\n' + description,
+        'JSON 欄位：name, theme, instruction, template, states, actions。',
+        'theme 只能是 blue、pastel、dark、rpg、minimal。',
+        'states 每項格式：{"key":"狀態名稱","label":"顯示名稱","value":"初始值","type":"text|number|progress|toggle","min":0,"max":100,"instruction":"AI 更新規則"}。',
+        'actions 每項格式：{"id":"英文或數字ID","label":"按鈕文字","type":"send|command|increment|decrement|set|toggle","payload":"訊息、指令、數值或設定值","key":"要修改的狀態key"}。',
+        'template 可使用安全 HTML 與 inline CSS；以 {{狀態key}} 插入狀態，以 {{action:動作ID}} 插入互動按鈕。禁止 script、iframe、外部網址、圖片與事件屬性。',
+        '請保持版面精簡，適合聊天視窗頂部。所有狀態 key 必須明確，所有 action token 必須有對應 actions。',
+        '目前草稿供參考：\n' + JSON.stringify({ name: current.name, theme: current.theme, states: current.states, actions: current.actions }),
+    ].join('\n\n');
+    permitManualGeneration(120000);
+    try {
+        const result = await context.generateQuietPrompt({ quietPrompt: prompt, trimToSentence: false, removeReasoning: true });
+        return normalizeWidget({ ...current, ...extractJsonObject(result), id: current.id });
+    } finally {
+        manualGenerationPermitUntil = 0;
+    }
+}
+
+function openCreatorWidgetsPanel() {
+    closeDialog();
+    const context = getContext();
+    const layer = document.getElementById('mol-dialog');
+    if (!context?.chatMetadata || !context.chatId || !layer) {
+        notify('請先開啟一個聊天室。', 'warning');
+        return;
+    }
+    const meta = getChatMeta(context);
+    const cards = meta.creatorWidgets.map((widget) => {
+        const active = widget.id === meta.activeWidgetId && widget.enabled;
+        return '<article class="mol-widget-manager-card' + (active ? ' active' : '') + '"><div><strong>' + escapeHtml(widget.name) + '</strong><small>' + escapeHtml(widget.theme) + ' · ' + widget.states.length + ' 個狀態 · ' + widget.actions.length + ' 個互動' + (widget.autoUpdate ? ' · AI 自動更新' : '') + '</small></div><span>' + (active ? '套用中' : '未套用') + '</span><button data-action="edit-creator-widget" data-widget-id="' + escapeHtml(widget.id) + '">修改／預覽</button><button data-action="activate-creator-widget" data-widget-id="' + escapeHtml(widget.id) + '">' + (active ? '停用' : '套用') + '</button><button data-action="export-creator-widget" data-widget-id="' + escapeHtml(widget.id) + '">匯出</button><button data-action="delete-creator-widget" data-widget-id="' + escapeHtml(widget.id) + '" class="danger">刪除</button></article>';
+    }).join('');
+    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CREATOR TOOLS</p><h3>創作者小工具</h3><p class="mol-dialog-hint">小工具只套用於目前聊天室。可用 AI 製作或手動編輯狀態、更新規則、安全 HTML 模板與互動按鈕。</p><div class="mol-panel-toolbar"><button class="primary" data-action="new-creator-widget"><i class="fa-solid fa-plus"></i> 新增小工具</button><button data-action="import-creator-widget"><i class="fa-solid fa-file-import"></i> 匯入 JSON</button></div><input id="mol-widget-import" type="file" accept=".json,application/json" hidden><div class="mol-widget-manager-list">' + (cards || '<p class="mol-dialog-copy">目前聊天室尚未建立小工具。</p>') + '</div></div>';
+    layer.hidden = false;
+    const input = layer.querySelector('#mol-widget-import');
+    const onImport = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+            const parsed = JSON.parse(await file.text());
+            const imported = normalizeWidget(Array.isArray(parsed) ? parsed[0] : parsed);
+            imported.id = 'widget-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+            await saveCreatorWidgets([...meta.creatorWidgets, imported], imported.id);
+            notify('小工具已匯入並套用。');
+            openCreatorWidgetsPanel();
+        } catch (error) {
+            console.error(error);
+            notify('匯入失敗：請選擇有效的小工具 JSON。', 'error');
+        }
+    };
+    input.addEventListener('change', onImport);
+    activeDialogCleanup = () => input.removeEventListener('change', onImport);
+}
+
+function openCreatorWidgetEditor(id = '') {
+    closeDialog();
+    const context = getContext();
+    const layer = document.getElementById('mol-dialog');
+    if (!context?.chatMetadata || !context.chatId || !layer) return;
+    const meta = getChatMeta(context);
+    const original = meta.creatorWidgets.find((item) => item.id === id);
+    let draft = normalizeWidget(original || { ...structuredClone(DEFAULT_WIDGET), id: 'widget-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7) });
+    layer.innerHTML = [
+        '<form class="mol-dialog mol-panel-dialog mol-wide-dialog mol-widget-editor"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">WIDGET STUDIO</p><h3>' + (original ? '修改創作者小工具' : '新增創作者小工具') + '</h3>',
+        '<div class="mol-widget-ai-box"><label><span>告訴 AI 想製作的風格與資訊</span><textarea name="aiDescription" rows="3" placeholder="例如：暗金色奇幻 RPG，顯示地點、HP、金額與夥伴等級，加入休息與前進按鈕。"></textarea></label><button type="button" data-action="ai-create-widget"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 製作／修改</button></div>',
+        '<div class="mol-form-grid"><label><span>小工具名稱</span><input name="name" value="' + escapeHtml(draft.name) + '" required></label><label><span>主題</span><select name="theme"><option value="blue">墨藍</option><option value="pastel">粉彩</option><option value="dark">暗色</option><option value="rpg">RPG</option><option value="minimal">極簡</option></select></label>',
+        '<label class="mol-check-label"><span>啟用小工具</span><input name="enabled" type="checkbox"' + (draft.enabled ? ' checked' : '') + '></label><label class="mol-check-label"><span>每次角色回覆後由 AI 更新狀態</span><input name="autoUpdate" type="checkbox"' + (draft.autoUpdate ? ' checked' : '') + '></label>',
+        '<label class="wide"><span>AI 狀態更新總指示</span><textarea name="instruction" rows="4">' + escapeHtml(draft.instruction) + '</textarea></label>',
+        '<label class="wide"><span>狀態值 JSON</span><small>type 可用 text、number、progress、toggle</small><textarea name="states" rows="12">' + escapeHtml(JSON.stringify(draft.states, null, 2)) + '</textarea></label>',
+        '<label class="wide"><span>互動動作 JSON</span><small>type 可用 send、command、increment、decrement、set、toggle</small><textarea name="actions" rows="10">' + escapeHtml(JSON.stringify(draft.actions, null, 2)) + '</textarea></label>',
+        '<label class="wide"><span>安全 HTML 模板</span><small>狀態：{{狀態key}}　按鈕：{{action:動作ID}}；不執行 script、外部連結或事件屬性</small><textarea name="template" rows="13">' + escapeHtml(draft.template) + '</textarea></label></div>',
+        '<div class="mol-widget-preview-heading"><span>即時預覽</span><select name="preset"><option value="">載入範例版型…</option><option value="blue">墨藍狀態</option><option value="pastel">粉彩校園</option><option value="dark">懸疑案件</option><option value="rpg">奇幻 RPG</option><option value="minimal">米色極簡</option></select></div><div class="mol-widget-preview"></div>',
+        '<div class="mol-dialog-actions"><button type="button" data-action="creator-widgets">取消</button><button type="submit" class="primary">儲存並套用</button></div></form>',
+    ].join('');
+    layer.hidden = false;
+    const form = layer.querySelector('form');
+    form.elements.theme.value = draft.theme;
+    const preview = form.querySelector('.mol-widget-preview');
+    const refreshPreview = () => {
+        try { draft = widgetJsonFromForm(form, draft); preview.innerHTML = renderCreatorWidgetMarkup(draft); }
+        catch (error) { preview.innerHTML = '<p class="mol-dialog-copy">' + escapeHtml(error.message) + '</p>'; }
+    };
+    const onInput = () => refreshPreview();
+    const onPreset = () => {
+        const preset = form.elements.preset.value;
+        if (!preset) return;
+        form.elements.theme.value = preset;
+        form.elements.template.value = WIDGET_PRESETS[preset];
+        refreshPreview();
+    };
+    const onPreviewClick = (event) => { event.preventDefault(); event.stopPropagation(); };
+    const onAi = async (event) => {
+        event.preventDefault();
+        const description = String(form.elements.aiDescription.value || '').trim();
+        if (!description) { notify('請先描述想要的小工具。', 'warning'); return; }
+        const button = form.querySelector('[data-action="ai-create-widget"]');
+        button.disabled = true;
+        button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> AI 製作中…';
+        try {
+            draft = await createWidgetWithAI(description, widgetJsonFromForm(form, draft));
+            form.elements.name.value = draft.name;
+            form.elements.theme.value = draft.theme;
+            form.elements.instruction.value = draft.instruction;
+            form.elements.states.value = JSON.stringify(draft.states, null, 2);
+            form.elements.actions.value = JSON.stringify(draft.actions, null, 2);
+            form.elements.template.value = draft.template;
+            refreshPreview();
+            notify('AI 小工具已產生，可繼續修改後儲存。');
+        } catch (error) {
+            console.error(error);
+            notify(error.message || 'AI 小工具製作失敗。', 'error');
+        } finally {
+            button.disabled = false;
+            button.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> AI 製作／修改';
+        }
+    };
+    const onSubmit = async (event) => {
+        event.preventDefault();
+        try {
+            draft = widgetJsonFromForm(form, draft);
+            const widgets = original ? meta.creatorWidgets.map((item) => item.id === original.id ? draft : item) : [...meta.creatorWidgets, draft];
+            await saveCreatorWidgets(widgets, draft.enabled ? draft.id : '');
+            notify('創作者小工具已儲存並套用。');
+            openCreatorWidgetsPanel();
+        } catch (error) { notify(error.message || '無法儲存小工具。', 'error'); }
+    };
+    form.addEventListener('input', onInput);
+    form.elements.preset.addEventListener('change', onPreset);
+    preview.addEventListener('click', onPreviewClick);
+    form.querySelector('[data-action="ai-create-widget"]').addEventListener('click', onAi);
+    form.addEventListener('submit', onSubmit);
+    refreshPreview();
+    activeDialogCleanup = () => {
+        form.removeEventListener('input', onInput);
+        form.elements.preset.removeEventListener('change', onPreset);
+        preview.removeEventListener('click', onPreviewClick);
+        form.querySelector('[data-action="ai-create-widget"]')?.removeEventListener('click', onAi);
+        form.removeEventListener('submit', onSubmit);
+    };
+}
+
+function expandWidgetText(value, widget) {
+    const context = getContext();
+    let text = String(value || '').replaceAll('{{char}}', context?.name2 || '角色').replaceAll('{{user}}', context?.name1 || '使用者');
+    for (const state of widget.states) text = text.split('{{' + state.key + '}}').join(String(state.value ?? ''));
+    return text;
+}
+
+async function runCreatorWidgetAction(actionId) {
+    const context = getContext();
+    const meta = getChatMeta(context);
+    const widget = activeCreatorWidget(meta);
+    const action = widget?.actions.find((item) => item.id === actionId);
+    if (!context || !widget || !action) return;
+    if (action.type === 'send') {
+        const text = expandWidgetText(action.payload, widget).trim();
+        const nativeTextarea = document.getElementById('send_textarea');
+        const nativeSend = document.getElementById('send_but');
+        if (!text || !(nativeTextarea instanceof HTMLTextAreaElement) || !(nativeSend instanceof HTMLElement)) { notify('此按鈕沒有可送出的內容。', 'warning'); return; }
+        nativeTextarea.value = text;
+        nativeTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+        permitManualGeneration();
+        nativeSend.click();
+        return;
+    }
+    if (action.type === 'command') {
+        const command = expandWidgetText(action.payload, widget).trim();
+        if (!command) { notify('此按鈕沒有設定 Slash Command。', 'warning'); return; }
+        permitManualGeneration();
+        await context.executeSlashCommandsWithOptions(command.startsWith('/') ? command : '/' + command);
+        manualGenerationPermitUntil = 0;
+        notify('小工具指令已執行。');
+        refreshAll();
+        return;
+    }
+    const states = widget.states.map((state) => {
+        if (state.key !== action.key) return state;
+        if (action.type === 'increment' || action.type === 'decrement') {
+            const delta = Number(action.payload || 1) * (action.type === 'decrement' ? -1 : 1);
+            const value = Math.max(Number(state.min ?? -Infinity), Math.min(Number(state.max ?? Infinity), Number(state.value || 0) + delta));
+            return { ...state, value };
+        }
+        if (action.type === 'toggle') return { ...state, value: !Boolean(state.value) };
+        return { ...state, value: action.payload };
+    });
+    const updated = { ...widget, states };
+    await saveCreatorWidgets(meta.creatorWidgets.map((item) => item.id === widget.id ? updated : item), widget.id);
+    notify('小工具狀態已更新。');
+}
+
+async function maybeAutoUpdateCreatorWidget() {
+    const context = getContext();
+    const meta = getChatMeta(context);
+    const widget = activeCreatorWidget(meta);
+    if (!widget?.autoUpdate || !context?.chat?.length || widgetUpdateRunning || isBusy) return;
+    if (summaryRunning) { setTimeout(maybeAutoUpdateCreatorWidget, 1500); return; }
+    if (context.chat.length <= widget.lastUpdatedMessageCount) return;
+    widgetUpdateRunning = true;
+    permitManualGeneration(120000);
+    try {
+        const transcript = context.chat.slice(-30).map((message) => (message.is_user ? (context.name1 || '使用者') : (message.name || context.name2 || '角色')) + '：' + String(message.mes || '')).join('\n').slice(-30000);
+        const prompt = ['請依照對話更新聊天室小工具狀態。只輸出 JSON 物件，key 必須完全等於狀態 key；無法判斷時保留原值。', '總指示：\n' + widget.instruction, '狀態定義與目前值：\n' + JSON.stringify(widget.states.map((state) => ({ key: state.key, value: state.value, type: state.type, min: state.min, max: state.max, instruction: state.instruction }))), '最新對話：\n' + transcript].join('\n\n');
+        const result = await context.generateQuietPrompt({ quietPrompt: prompt, trimToSentence: false, removeReasoning: true });
+        const values = extractJsonObject(result);
+        const states = widget.states.map((state) => {
+            if (!Object.hasOwn(values, state.key)) return state;
+            const raw = values[state.key];
+            if (['number', 'progress'].includes(state.type)) return { ...state, value: Math.max(state.min, Math.min(state.max, Number(raw) || 0)) };
+            if (state.type === 'toggle') return { ...state, value: typeof raw === 'string' ? ['true', '1', 'yes', 'on', '是'].includes(raw.toLocaleLowerCase()) : Boolean(raw) };
+            return { ...state, value: String(raw ?? '').slice(0, 500) };
+        });
+        const updated = { ...widget, states, lastUpdatedMessageCount: context.chat.length };
+        await saveCreatorWidgets(meta.creatorWidgets.map((item) => item.id === widget.id ? updated : item), widget.id);
+    } catch (error) {
+        console.error('[墨藍藝廊] 小工具狀態更新失敗', error);
+        notify('小工具 AI 狀態更新失敗，可在創作者小工具中手動修改。', 'error');
+    } finally {
+        manualGenerationPermitUntil = 0;
+        widgetUpdateRunning = false;
+    }
+}
+
 async function exportChatTxt({ type, entityId, chatId }) {
     const context = getContext();
     if (!context || !chatId) return;
@@ -1578,6 +1977,42 @@ async function handleRootClick(event) {
         case 'generation-settings': openInternalPanel('generation-settings'); break;
         case 'usage-stats': openUsagePanel(); break;
         case 'memory-summary': openMemorySummaryPanel(); break;
+        case 'creator-widgets': openCreatorWidgetsPanel(); break;
+        case 'new-creator-widget': openCreatorWidgetEditor(); break;
+        case 'import-creator-widget': document.getElementById('mol-widget-import')?.click(); break;
+        case 'edit-creator-widget': openCreatorWidgetEditor(actionElement.dataset.widgetId); break;
+        case 'activate-creator-widget': {
+            const meta = getChatMeta(context);
+            const id = actionElement.dataset.widgetId;
+            const activate = meta.activeWidgetId !== id;
+            const widgets = meta.creatorWidgets.map((item) => item.id === id ? { ...item, enabled: activate ? true : item.enabled } : item);
+            await saveCreatorWidgets(widgets, activate ? id : '');
+            notify(activate ? '小工具已套用至目前聊天室。' : '目前聊天室的小工具已停用。');
+            openCreatorWidgetsPanel();
+            break;
+        }
+        case 'export-creator-widget': {
+            const widget = getChatMeta(context).creatorWidgets.find((item) => item.id === actionElement.dataset.widgetId);
+            if (!widget) break;
+            downloadBlob(new Blob([JSON.stringify(widget, null, 2)], { type: 'application/json;charset=utf-8' }), safeFilename(widget.name, 'creator-widget') + '.json');
+            notify('小工具已匯出。');
+            break;
+        }
+        case 'delete-creator-widget': {
+            const meta = getChatMeta(context);
+            const widget = meta.creatorWidgets.find((item) => item.id === actionElement.dataset.widgetId);
+            if (!widget) break;
+            openConfirmDialog('刪除創作者小工具', '確定刪除「' + widget.name + '」？此操作只影響目前聊天室。', async () => {
+                const widgets = meta.creatorWidgets.filter((item) => item.id !== widget.id);
+                await saveCreatorWidgets(widgets, meta.activeWidgetId === widget.id ? '' : meta.activeWidgetId);
+                notify('小工具已刪除。');
+                openCreatorWidgetsPanel();
+                return false;
+            });
+            break;
+        }
+        case 'widget-run': await runCreatorWidgetAction(actionElement.dataset.widgetActionId); break;
+        case 'ai-create-widget': break;
         case 'user-settings': openInternalPanel('user-settings'); break;
         case 'stop-generation': context.stopGeneration(); closeDialog(); break;
         case 'new-chat': await executeNewChat(); break;
@@ -1774,7 +2209,7 @@ function subscribeToSillyTavern() {
         refreshMessages();
         setTimeout(() => { if (isOpen) loadChatEntries(); }, 500);
     });
-    subscribe(events.MESSAGE_RECEIVED, () => { refreshMessages(); setTimeout(maybeAutoSummarize, 250); });
+    subscribe(events.MESSAGE_RECEIVED, () => { refreshMessages(); setTimeout(maybeAutoSummarize, 250); setTimeout(maybeAutoUpdateCreatorWidget, 700); });
     subscribe(events.MESSAGE_EDITED, refreshMessages);
     subscribe(events.MESSAGE_DELETED, refreshMessages);
     subscribe(events.MESSAGE_SWIPED, refreshMessages);
@@ -1815,7 +2250,7 @@ function subscribeToSillyTavern() {
         disableGroupAutoMode();
         renderComposer();
     });
-    subscribe(events.GENERATION_ENDED, () => { manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); });
+    subscribe(events.GENERATION_ENDED, () => { manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); setTimeout(maybeAutoUpdateCreatorWidget, 700); });
     subscribe(events.GENERATION_STOPPED, () => { manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) renderComposer(); });
     subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
     subscribe(events.MAIN_API_CHANGED, refresh);
@@ -1869,6 +2304,7 @@ export function onDisable() {
     manualGenerationPermitUntil = 0;
     blockedGenerationUntil = 0;
     context?.setExtensionPrompt?.('molan_gallery_memory_summary', '', 0, 0, false, 0);
+    context?.setExtensionPrompt?.('molan_gallery_creator_widget', '', 0, 0, false, 0);
     window.clearTimeout(streamTimer);
     for (const { type, handler } of subscribedEvents.splice(0)) {
         if (type) context?.eventSource?.off?.(type, handler);
