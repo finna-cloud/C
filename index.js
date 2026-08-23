@@ -1399,19 +1399,27 @@ function openCharacterOverview(index = characterCarouselIndex, flipped = false) 
     let startX = 0;
     let startY = 0;
     let pointerId = null;
+    let horizontalDragStarted = false;
+    let pointerStartedOnFlipTarget = false;
     const onPointerDown = (event) => {
         if (characters.length < 2 || characterCarouselTransitioning || (event.pointerType === 'mouse' && event.button !== 0)) return;
         pointerId = event.pointerId;
         startX = event.clientX;
         startY = event.clientY;
-        shell?.classList.add('is-dragging');
-        stage?.setPointerCapture?.(event.pointerId);
+        horizontalDragStarted = false;
+        pointerStartedOnFlipTarget = Boolean(event.target.closest?.('[data-action="toggle-character-flip"]'));
     };
     const onPointerMove = (event) => {
         if (pointerId !== event.pointerId || !shell) return;
         const deltaX = event.clientX - startX;
         const deltaY = event.clientY - startY;
         if (Math.abs(deltaY) > Math.abs(deltaX) * 1.25) return;
+        if (!horizontalDragStarted) {
+            if (Math.abs(deltaX) < 10) return;
+            horizontalDragStarted = true;
+            shell.classList.add('is-dragging');
+            stage?.setPointerCapture?.(event.pointerId);
+        }
         const limitedX = Math.max(-110, Math.min(110, deltaX * .72));
         shell.style.setProperty('--mol-card-drag-x', limitedX + 'px');
         shell.style.setProperty('--mol-card-drag-rotate', (limitedX / 42) + 'deg');
@@ -1420,17 +1428,35 @@ function openCharacterOverview(index = characterCarouselIndex, flipped = false) 
         if (pointerId !== event.pointerId) return;
         const deltaX = event.clientX - startX;
         const deltaY = event.clientY - startY;
+        const wasHorizontalDrag = horizontalDragStarted;
+        const startedOnFlipTarget = pointerStartedOnFlipTarget;
         pointerId = null;
+        horizontalDragStarted = false;
+        pointerStartedOnFlipTarget = false;
+        if (stage?.hasPointerCapture?.(event.pointerId)) stage.releasePointerCapture(event.pointerId);
         shell?.classList.remove('is-dragging');
         shell?.style.removeProperty('--mol-card-drag-x');
         shell?.style.removeProperty('--mol-card-drag-rotate');
-        if (Math.abs(deltaX) < 52 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
+        if (Math.abs(deltaX) < 52 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) {
+            if (wasHorizontalDrag && startedOnFlipTarget && Math.abs(deltaX) < 24 && Math.abs(deltaY) < 24) {
+                characterSwipeIgnoreUntil = Date.now() + 80;
+                characterCarouselFlipped = !characterCarouselFlipped;
+                const flip = layer.querySelector('.mol-character-flip');
+                flip?.classList.toggle('is-flipped', characterCarouselFlipped);
+                flip?.querySelector('.mol-character-front')?.setAttribute('aria-hidden', characterCarouselFlipped ? 'true' : 'false');
+                flip?.querySelector('.mol-character-image-wrap')?.setAttribute('tabindex', characterCarouselFlipped ? '-1' : '0');
+                flip?.querySelector('.mol-character-back')?.setAttribute('aria-hidden', characterCarouselFlipped ? 'false' : 'true');
+            }
+            return;
+        }
         characterSwipeIgnoreUntil = Date.now() + 360;
         changeCharacterOverview(deltaX > 0 ? -1 : 1);
     };
     const onPointerCancel = (event) => {
         if (pointerId !== event.pointerId) return;
         pointerId = null;
+        horizontalDragStarted = false;
+        pointerStartedOnFlipTarget = false;
         shell?.classList.remove('is-dragging');
         shell?.style.removeProperty('--mol-card-drag-x');
         shell?.style.removeProperty('--mol-card-drag-rotate');
