@@ -1544,6 +1544,42 @@ body.mol-gallery-open {
     aspect-ratio: 3 / 4;
     min-height: 0;
     perspective: 1400px;
+    transform: translate3d(var(--mol-card-drag-x, 0), 0, 0) rotate(var(--mol-card-drag-rotate, 0));
+    transform-origin: center 72%;
+    transition: transform .34s cubic-bezier(.22, .8, .22, 1), opacity .34s ease, filter .34s ease;
+    will-change: transform, opacity;
+}
+
+.mol-character-frame-shell.is-dragging {
+    transition: none;
+}
+
+.mol-character-frame-shell.is-exiting-next {
+    opacity: 0;
+    filter: blur(2px);
+    transform: translate3d(-72px, 0, 0) rotate(-1.8deg) scale(.975);
+}
+
+.mol-character-frame-shell.is-exiting-previous {
+    opacity: 0;
+    filter: blur(2px);
+    transform: translate3d(72px, 0, 0) rotate(1.8deg) scale(.975);
+}
+
+.mol-character-frame-shell.is-entering-next {
+    opacity: 0;
+    transform: translate3d(72px, 0, 0) rotate(1.8deg) scale(.975);
+}
+
+.mol-character-frame-shell.is-entering-previous {
+    opacity: 0;
+    transform: translate3d(-72px, 0, 0) rotate(-1.8deg) scale(.975);
+}
+
+.mol-character-frame-shell.is-entering-next.is-settled,
+.mol-character-frame-shell.is-entering-previous.is-settled {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(0) scale(1);
 }
 
 .mol-character-flip,
@@ -1556,7 +1592,9 @@ body.mol-gallery-open {
 .mol-character-flip-inner {
     position: relative;
     transform-style: preserve-3d;
-    transition: transform .72s cubic-bezier(.2, .72, .2, 1);
+    transition: transform .78s cubic-bezier(.18, .82, .2, 1), filter .42s ease;
+    transform-origin: center center;
+    will-change: transform;
 }
 
 .mol-character-flip.is-flipped .mol-character-flip-inner {
@@ -1567,52 +1605,47 @@ body.mol-gallery-open {
     position: absolute;
     inset: 0;
     overflow: hidden;
-    border: 10px solid #2b2924;
-    outline: 2px solid #9a8150;
-    outline-offset: -6px;
-    background: #ede7da;
-    box-shadow: 0 18px 40px rgba(23, 23, 21, .24), inset 0 0 0 2px #d8c48f, inset 0 0 0 5px #4a4336;
+    border: 1px solid rgba(41, 39, 34, .28);
+    border-radius: 3px;
+    outline: 0;
+    background: #f4f1e9;
+    box-shadow: 0 24px 54px rgba(23, 23, 21, .18), 0 2px 8px rgba(23, 23, 21, .08);
     backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    transition: box-shadow .42s ease, border-color .42s ease;
+}
+
+.mol-character-frame-shell:hover .mol-character-face {
+    border-color: rgba(41, 39, 34, .38);
+    box-shadow: 0 28px 62px rgba(23, 23, 21, .2), 0 3px 10px rgba(23, 23, 21, .09);
 }
 
 .mol-frame-ornament {
     position: absolute;
     z-index: 3;
-    inset: 9px;
-    border: 1px solid rgba(232, 210, 156, .92);
+    inset: 10px;
+    border: 1px solid rgba(41, 39, 34, .16);
     pointer-events: none;
 }
 
 .mol-frame-ornament::before,
 .mol-frame-ornament::after {
-    position: absolute;
-    width: 34px;
-    height: 34px;
-    border-color: #c4a663;
-    content: "";
-}
-
-.mol-frame-ornament::before {
-    top: 5px;
-    left: 5px;
-    border-top: 2px solid;
-    border-left: 2px solid;
-}
-
-.mol-frame-ornament::after {
-    right: 5px;
-    bottom: 5px;
-    border-right: 2px solid;
-    border-bottom: 2px solid;
+    display: none;
 }
 
 .mol-character-front {
     display: grid;
     grid-template-rows: minmax(0, 1fr) auto;
-    padding: 20px;
+    gap: 12px;
+    padding: 18px;
     color: var(--mol-ink);
     text-align: left;
     cursor: pointer;
+    pointer-events: auto;
+}
+
+.mol-character-flip.is-flipped .mol-character-front {
+    pointer-events: none;
 }
 
 .mol-character-image-wrap {
@@ -1621,8 +1654,8 @@ body.mol-gallery-open {
     min-height: 0;
     overflow: hidden;
     place-items: center;
-    border: 1px solid #b9a77c;
-    background: #171715;
+    border: 0;
+    background: #e8e5de;
 }
 
 .mol-character-portrait-image {
@@ -1647,7 +1680,8 @@ body.mol-gallery-open {
 .mol-character-nameplate {
     display: grid;
     gap: 3px;
-    padding: 14px 52px 2px 2px;
+    padding: 12px 52px 2px 2px;
+    border-top: 1px solid rgba(41, 39, 34, .18);
 }
 
 .mol-character-nameplate strong {
@@ -1681,6 +1715,12 @@ body.mol-gallery-open {
     padding: 25px;
     transform: rotateY(180deg);
     user-select: text;
+    cursor: pointer;
+    pointer-events: none;
+}
+
+.mol-character-flip.is-flipped .mol-character-back {
+    pointer-events: auto;
 }
 
 .mol-character-back-heading {
@@ -1689,7 +1729,7 @@ body.mol-gallery-open {
     justify-content: space-between;
     gap: 14px;
     padding-bottom: 10px;
-    border-bottom: 1px solid #aa9a75;
+    border-bottom: 1px solid rgba(41, 39, 34, .2);
 }
 
 .mol-character-back-heading h4 {
@@ -1697,12 +1737,22 @@ body.mol-gallery-open {
     font: 500 calc(24px * var(--mol-ui-scale))/1.2 Georgia, "Noto Serif TC", serif;
 }
 
+.mol-back-flip-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    color: var(--mol-muted);
+    font-size: calc(8px * var(--mol-ui-scale));
+    letter-spacing: .05em;
+}
+
 .mol-character-back-heading button {
     position: relative;
     z-index: 4;
     width: 34px;
     height: 34px;
-    border: 1px solid #aa9a75;
+    border: 1px solid rgba(41, 39, 34, .24);
     color: var(--mol-blue);
     background: transparent;
 }
@@ -1720,7 +1770,7 @@ body.mol-gallery-open {
 
 .mol-character-back-scroll section {
     padding-bottom: 10px;
-    border-bottom: 1px solid rgba(122, 105, 70, .3);
+    border-bottom: 1px solid rgba(41, 39, 34, .14);
 }
 
 .mol-character-back-scroll span {
@@ -1746,7 +1796,7 @@ body.mol-gallery-open {
 .mol-character-card-actions button {
     min-width: 0;
     padding: 7px 5px;
-    border: 1px solid #b0a17f;
+    border: 1px solid rgba(41, 39, 34, .22);
     color: var(--mol-ink);
     background: rgba(255, 255, 255, .45);
     font-size: calc(8px * var(--mol-ui-scale));
@@ -2058,7 +2108,7 @@ body.mol-gallery-open {
     .mol-carousel-nav span { display: none; }
 
     .mol-character-face {
-        border-width: 8px;
+        border-width: 1px;
     }
 
     .mol-character-front {
@@ -2109,6 +2159,7 @@ body.mol-gallery-open {
     #molan-gallery-root *::after {
         scroll-behavior: auto !important;
         transition: none !important;
+        animation: none !important;
     }
 }
 

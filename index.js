@@ -76,6 +76,9 @@ let currentGeneration = { type: '', chatId: '', startedAt: 0 };
 let characterCarouselIndex = 0;
 let characterCarouselFlipped = false;
 let characterSwipeIgnoreUntil = 0;
+let characterCarouselTransitioning = false;
+let characterCarouselEnterDirection = 0;
+let characterCarouselTransitionTimer = null;
 let nativeFetch = null;
 let fetchWrapper = null;
 let worldInfoModulePromise = null;
@@ -1352,13 +1355,13 @@ function openCharacterOverview(index = characterCarouselIndex, flipped = false) 
             '<div class="mol-carousel-count"><span>FRAME ' + String(id + 1).padStart(2, '0') + '</span><strong>' + (id + 1) + ' / ' + characters.length + '</strong></div>',
             '<div class="mol-frame-stage">',
             '<button type="button" class="mol-carousel-nav previous" data-action="character-carousel-previous" aria-label="上一張角色卡"' + (characters.length < 2 ? ' disabled' : '') + '><i class="fa-solid fa-chevron-left"></i><span>上一張</span></button>',
-            '<article class="mol-character-frame-shell">',
+            '<article class="mol-character-frame-shell' + (characterCarouselEnterDirection > 0 ? ' is-entering-next' : characterCarouselEnterDirection < 0 ? ' is-entering-previous' : '') + '">',
             '<div class="mol-character-flip' + (characterCarouselFlipped ? ' is-flipped' : '') + '"><div class="mol-character-flip-inner">',
-            '<button type="button" class="mol-character-face mol-character-front" data-action="toggle-character-flip" aria-label="翻面查看 ' + escapeHtml(name) + ' 的角色資訊">',
+            '<button type="button" class="mol-character-face mol-character-front" data-action="toggle-character-flip" aria-label="翻面查看 ' + escapeHtml(name) + ' 的角色資訊" aria-hidden="' + (characterCarouselFlipped ? 'true' : 'false') + '" tabindex="' + (characterCarouselFlipped ? '-1' : '0') + '">',
             '<span class="mol-frame-ornament" aria-hidden="true"></span><span class="mol-character-image-wrap">' + (image || '<span class="mol-character-image-fallback">' + escapeHtml(initials(name)) + '</span>') + '</span>',
             '<span class="mol-character-nameplate"><strong>' + escapeHtml(name) + '</strong><small>' + escapeHtml(data.personality || character.personality || '角色卡') + '</small></span><span class="mol-flip-hint"><i class="fa-solid fa-rotate"></i> 點擊翻面</span></button>',
-            '<section class="mol-character-face mol-character-back" aria-label="' + escapeHtml(name) + ' 的角色資訊"><span class="mol-frame-ornament" aria-hidden="true"></span>',
-            '<div class="mol-character-back-heading"><div><p class="mol-eyebrow">CHARACTER CARD</p><h4>' + escapeHtml(name) + '</h4></div><button type="button" data-action="toggle-character-flip" title="翻回圖片"><i class="fa-solid fa-rotate-left"></i></button></div>',
+            '<section class="mol-character-face mol-character-back" data-action="toggle-character-flip" aria-label="' + escapeHtml(name) + ' 的角色資訊；點擊卡片可翻回角色圖片" aria-hidden="' + (characterCarouselFlipped ? 'false' : 'true') + '"><span class="mol-frame-ornament" aria-hidden="true"></span>',
+            '<div class="mol-character-back-heading"><div><p class="mol-eyebrow">CHARACTER CARD</p><h4>' + escapeHtml(name) + '</h4><small class="mol-back-flip-hint"><i class="fa-solid fa-rotate-left"></i> 再點一次卡片返回圖片</small></div><button type="button" data-action="toggle-character-flip" title="翻回圖片"><i class="fa-solid fa-rotate-left"></i></button></div>',
             '<div class="mol-character-back-scroll">' + field('DESCRIPTION', data.description || character.description) + field('PERSONALITY', data.personality || character.personality) + field('SCENARIO', data.scenario) + field('FIRST MESSAGE', data.first_mes || character.first_mes) + '</div>',
             '<div class="mol-character-card-actions"><button data-action="edit-character-card" data-character-id="' + id + '">修改</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="png">匯出 PNG</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="json">匯出 JSON</button><button data-action="delete-character-card" data-character-id="' + id + '" class="danger">刪除</button><button class="primary" data-action="select-overview-character" data-character-id="' + id + '">進入聊天室</button></div>',
             '</section></div></div></article>',
@@ -1384,42 +1387,103 @@ function openCharacterOverview(index = characterCarouselIndex, flipped = false) 
     };
     input.addEventListener('change', onChange);
     const stage = layer.querySelector('.mol-frame-stage');
+    const shell = layer.querySelector('.mol-character-frame-shell');
+    if (characterCarouselEnterDirection && shell) {
+        requestAnimationFrame(() => requestAnimationFrame(() => shell.classList.add('is-settled')));
+        window.setTimeout(() => {
+            shell.classList.remove('is-entering-next', 'is-entering-previous', 'is-settled');
+            characterCarouselTransitioning = false;
+        }, 420);
+        characterCarouselEnterDirection = 0;
+    } else {
+        characterCarouselTransitioning = false;
+    }
     let startX = 0;
     let startY = 0;
     let pointerId = null;
     const onPointerDown = (event) => {
-        if (characters.length < 2 || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        if (characters.length < 2 || characterCarouselTransitioning || (event.pointerType === 'mouse' && event.button !== 0)) return;
         pointerId = event.pointerId;
         startX = event.clientX;
         startY = event.clientY;
+        shell?.classList.add('is-dragging');
         stage?.setPointerCapture?.(event.pointerId);
+    };
+    const onPointerMove = (event) => {
+        if (pointerId !== event.pointerId || !shell) return;
+        const deltaX = event.clientX - startX;
+        const deltaY = event.clientY - startY;
+        if (Math.abs(deltaY) > Math.abs(deltaX) * 1.25) return;
+        const limitedX = Math.max(-110, Math.min(110, deltaX * .72));
+        shell.style.setProperty('--mol-card-drag-x', limitedX + 'px');
+        shell.style.setProperty('--mol-card-drag-rotate', (limitedX / 42) + 'deg');
     };
     const onPointerUp = (event) => {
         if (pointerId !== event.pointerId) return;
         const deltaX = event.clientX - startX;
         const deltaY = event.clientY - startY;
         pointerId = null;
+        shell?.classList.remove('is-dragging');
+        shell?.style.removeProperty('--mol-card-drag-x');
+        shell?.style.removeProperty('--mol-card-drag-rotate');
         if (Math.abs(deltaX) < 52 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
         characterSwipeIgnoreUntil = Date.now() + 360;
-        const nextIndex = deltaX > 0
-            ? (characterCarouselIndex + 1) % characters.length
-            : (characterCarouselIndex - 1 + characters.length) % characters.length;
-        openCharacterOverview(nextIndex, false);
+        changeCharacterOverview(deltaX > 0 ? 1 : -1);
+    };
+    const onPointerCancel = (event) => {
+        if (pointerId !== event.pointerId) return;
+        pointerId = null;
+        shell?.classList.remove('is-dragging');
+        shell?.style.removeProperty('--mol-card-drag-x');
+        shell?.style.removeProperty('--mol-card-drag-rotate');
     };
     const onKeyDown = (event) => {
         if (characters.length < 2) return;
-        if (event.key === 'ArrowRight') openCharacterOverview((characterCarouselIndex + 1) % characters.length, false);
-        if (event.key === 'ArrowLeft') openCharacterOverview((characterCarouselIndex - 1 + characters.length) % characters.length, false);
+        if (event.key === 'ArrowRight') changeCharacterOverview(1);
+        if (event.key === 'ArrowLeft') changeCharacterOverview(-1);
     };
     stage?.addEventListener('pointerdown', onPointerDown);
+    stage?.addEventListener('pointermove', onPointerMove);
     stage?.addEventListener('pointerup', onPointerUp);
+    stage?.addEventListener('pointercancel', onPointerCancel);
     layer.addEventListener('keydown', onKeyDown);
     activeDialogCleanup = () => {
+        if (characterCarouselTransitionTimer) {
+            window.clearTimeout(characterCarouselTransitionTimer);
+            characterCarouselTransitionTimer = null;
+        }
         input.removeEventListener('change', onChange);
         stage?.removeEventListener('pointerdown', onPointerDown);
+        stage?.removeEventListener('pointermove', onPointerMove);
         stage?.removeEventListener('pointerup', onPointerUp);
+        stage?.removeEventListener('pointercancel', onPointerCancel);
         layer.removeEventListener('keydown', onKeyDown);
     };
+}
+
+function changeCharacterOverview(direction, explicitIndex = null) {
+    const context = getContext();
+    const characters = context?.characters || [];
+    if (characters.length < 2 || characterCarouselTransitioning) return;
+    const normalizedDirection = direction >= 0 ? 1 : -1;
+    const nextIndex = explicitIndex === null
+        ? (characterCarouselIndex + normalizedDirection + characters.length) % characters.length
+        : Math.max(0, Math.min(characters.length - 1, Number(explicitIndex) || 0));
+    if (nextIndex === characterCarouselIndex) return;
+    const shell = document.querySelector('#mol-dialog .mol-character-frame-shell');
+    if (!shell || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        openCharacterOverview(nextIndex, false);
+        return;
+    }
+    characterCarouselTransitioning = true;
+    characterCarouselFlipped = false;
+    shell.querySelector('.mol-character-flip')?.classList.remove('is-flipped');
+    shell.classList.add(normalizedDirection > 0 ? 'is-exiting-next' : 'is-exiting-previous');
+    characterCarouselTransitionTimer = window.setTimeout(() => {
+        characterCarouselTransitionTimer = null;
+        characterCarouselEnterDirection = normalizedDirection;
+        openCharacterOverview(nextIndex, false);
+    }, 230);
 }
 
 function openCharacterCard(id) {
@@ -2173,21 +2237,34 @@ async function handleRootClick(event) {
         case 'character-overview': openCharacterOverview(0, false); break;
         case 'refresh-character-overview': await context.getCharacters(); openCharacterOverview(characterCarouselIndex, false); break;
         case 'toggle-character-flip':
-            if (Date.now() < characterSwipeIgnoreUntil) break;
+            if (Date.now() < characterSwipeIgnoreUntil || characterCarouselTransitioning) break;
+            if (window.getSelection?.()?.toString()) break;
             characterCarouselFlipped = !characterCarouselFlipped;
-            document.querySelector('#mol-dialog .mol-character-flip')?.classList.toggle('is-flipped', characterCarouselFlipped);
+            {
+                const flip = document.querySelector('#mol-dialog .mol-character-flip');
+                flip?.classList.toggle('is-flipped', characterCarouselFlipped);
+                const front = flip?.querySelector('.mol-character-front');
+                const back = flip?.querySelector('.mol-character-back');
+                front?.setAttribute('aria-hidden', characterCarouselFlipped ? 'true' : 'false');
+                front?.setAttribute('tabindex', characterCarouselFlipped ? '-1' : '0');
+                back?.setAttribute('aria-hidden', characterCarouselFlipped ? 'false' : 'true');
+            }
             break;
         case 'character-carousel-next': {
             const count = context.characters?.length || 0;
-            if (count) openCharacterOverview((characterCarouselIndex + 1) % count, false);
+            if (count) changeCharacterOverview(1);
             break;
         }
         case 'character-carousel-previous': {
             const count = context.characters?.length || 0;
-            if (count) openCharacterOverview((characterCarouselIndex - 1 + count) % count, false);
+            if (count) changeCharacterOverview(-1);
             break;
         }
-        case 'character-carousel-go': openCharacterOverview(Number(actionElement.dataset.characterIndex), false); break;
+        case 'character-carousel-go': {
+            const targetIndex = Number(actionElement.dataset.characterIndex);
+            changeCharacterOverview(targetIndex > characterCarouselIndex ? 1 : -1, targetIndex);
+            break;
+        }
         case 'new-character-card': await openCharacterEditor(); break;
         case 'import-character-card': document.getElementById('mol-character-import')?.click(); break;
         case 'view-character-card': openCharacterCard(actionElement.dataset.characterId); break;
