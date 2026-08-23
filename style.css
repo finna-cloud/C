@@ -21,6 +21,17 @@ body.mol-gallery-open {
 #molan-gallery-root {
     --mol-ui-scale: 1;
     --mol-chat-font-size: 14px;
+    --mol-dialog-width: 460px;
+    --mol-wide-dialog-width: 860px;
+    --mol-dialog-padding: 28px;
+    --mol-dialog-mobile-padding: 22px;
+    --mol-dialog-layer-padding: 20px;
+    --mol-dialog-layer-mobile-padding: 10px;
+    --mol-dialog-shadow: 10px;
+    --mol-viewport-left: 0px;
+    --mol-viewport-top: 0px;
+    --mol-viewport-width: 100vw;
+    --mol-viewport-height: 100dvh;
     position: fixed;
     inset: 0;
     z-index: 100000;
@@ -1057,10 +1068,17 @@ body.mol-gallery-open {
 .mol-dialog-layer {
     position: fixed;
     z-index: 8;
-    inset: 0;
+    inset: auto;
+    top: var(--mol-viewport-top);
+    left: var(--mol-viewport-left);
+    width: var(--mol-viewport-width);
+    height: var(--mol-viewport-height);
     display: grid;
-    padding: 20px;
-    place-items: center;
+    align-items: safe center;
+    justify-items: center;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: var(--mol-dialog-layer-padding);
     background: rgba(23, 23, 21, .55);
     backdrop-filter: blur(4px);
 }
@@ -1071,12 +1089,15 @@ body.mol-gallery-open {
 
 .mol-dialog {
     position: relative;
-    width: min(460px, 100%);
-    padding: 28px;
+    width: min(var(--mol-dialog-width), 100%);
+    max-width: 100%;
+    max-height: calc(var(--mol-viewport-height) - var(--mol-dialog-layer-padding) - var(--mol-dialog-layer-padding));
+    padding: var(--mol-dialog-padding);
+    overflow-y: auto;
     border: 1px solid var(--mol-ink);
     color: var(--mol-ink);
     background: var(--mol-light);
-    box-shadow: 10px 10px 0 var(--mol-blue);
+    box-shadow: var(--mol-dialog-shadow) var(--mol-dialog-shadow) 0 var(--mol-blue);
 }
 
 .mol-dialog h3 {
@@ -1167,7 +1188,7 @@ body.mol-gallery-open {
 }
 
 .mol-panel-dialog {
-    max-height: min(680px, calc(100dvh - 40px));
+    max-height: min(680px, calc(var(--mol-viewport-height) - var(--mol-dialog-layer-padding) - var(--mol-dialog-layer-padding)));
     overflow-y: auto;
 }
 
@@ -1260,7 +1281,7 @@ body.mol-gallery-open {
 }
 
 .mol-wide-dialog {
-    width: min(860px, 100%);
+    width: min(var(--mol-wide-dialog-width), 100%);
 }
 
 .mol-panel-toolbar {
@@ -2206,11 +2227,12 @@ body.mol-gallery-open {
     }
 
     .mol-dialog-layer {
-        padding: 10px;
+        padding: var(--mol-dialog-layer-mobile-padding);
     }
 
     .mol-dialog {
-        padding: 22px 18px;
+        max-height: calc(var(--mol-viewport-height) - var(--mol-dialog-layer-mobile-padding) - var(--mol-dialog-layer-mobile-padding));
+        padding: var(--mol-dialog-mobile-padding) max(18px, var(--mol-dialog-layer-mobile-padding));
     }
 
     .mol-world-books article,
@@ -2231,7 +2253,7 @@ body.mol-gallery-open {
 
     .mol-character-dialog {
         width: 100%;
-        max-height: calc(100dvh - 20px);
+        max-height: calc(var(--mol-viewport-height) - var(--mol-dialog-layer-mobile-padding) - var(--mol-dialog-layer-mobile-padding));
     }
 
     .mol-frame-stage {

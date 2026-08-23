@@ -117,8 +117,46 @@ function applyTypographySettings() {
     const root = document.getElementById(ROOT_ID);
     if (!root) return;
     const settings = getSettings();
-    root.style.setProperty('--mol-ui-scale', String(settings.interfaceFontSize / DEFAULT_SETTINGS.interfaceFontSize));
+    const scale = settings.interfaceFontSize / DEFAULT_SETTINGS.interfaceFontSize;
+    root.style.setProperty('--mol-ui-scale', String(scale));
     root.style.setProperty('--mol-chat-font-size', settings.messageFontSize + 'px');
+    root.style.setProperty('--mol-dialog-width', Math.round(460 * scale) + 'px');
+    root.style.setProperty('--mol-wide-dialog-width', Math.round(860 * scale) + 'px');
+    root.style.setProperty('--mol-dialog-padding', Math.round(28 * scale) + 'px');
+    root.style.setProperty('--mol-dialog-mobile-padding', Math.round(22 * scale) + 'px');
+    root.style.setProperty('--mol-dialog-layer-padding', Math.round(20 * scale) + 'px');
+    root.style.setProperty('--mol-dialog-layer-mobile-padding', Math.round(10 * scale) + 'px');
+    root.style.setProperty('--mol-dialog-shadow', Math.round(10 * scale) + 'px');
+    syncDialogViewport();
+}
+
+function syncDialogViewport() {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft ?? 0;
+    const top = viewport?.offsetTop ?? 0;
+    const width = viewport?.width ?? window.innerWidth;
+    const height = viewport?.height ?? window.innerHeight;
+    root.style.setProperty('--mol-viewport-left', left + 'px');
+    root.style.setProperty('--mol-viewport-top', top + 'px');
+    root.style.setProperty('--mol-viewport-width', width + 'px');
+    root.style.setProperty('--mol-viewport-height', height + 'px');
+}
+
+function installViewportSync() {
+    syncDialogViewport();
+    window.addEventListener('resize', syncDialogViewport, { passive: true });
+    window.addEventListener('orientationchange', syncDialogViewport, { passive: true });
+    window.visualViewport?.addEventListener('resize', syncDialogViewport, { passive: true });
+    window.visualViewport?.addEventListener('scroll', syncDialogViewport, { passive: true });
+}
+
+function removeViewportSync() {
+    window.removeEventListener('resize', syncDialogViewport);
+    window.removeEventListener('orientationchange', syncDialogViewport);
+    window.visualViewport?.removeEventListener('resize', syncDialogViewport);
+    window.visualViewport?.removeEventListener('scroll', syncDialogViewport);
 }
 
 function normalizeUsage(value) {
@@ -905,6 +943,7 @@ function setOpen(value) {
     root.hidden = !isOpen;
     document.body.classList.toggle('mol-gallery-open', isOpen);
     if (isOpen) {
+        syncDialogViewport();
         enterInspectionMode({ stopActive: true });
         applyMemoryInjection();
         root.classList.toggle('compact-messages', Boolean(getSettings().compactMessages));
@@ -2948,6 +2987,7 @@ function handleFileChange(event) {
 
 function initialize() {
     createRoot();
+    installViewportSync();
     installLauncher();
     installSettings();
     installUsageCapture();
@@ -2983,6 +3023,7 @@ export function onDisable() {
     }
     document.removeEventListener('keydown', handleGlobalKeydown);
     document.removeEventListener('change', handleFileChange, true);
+    removeViewportSync();
     document.getElementById(ROOT_ID)?.remove();
     document.getElementById(LAUNCHER_ID)?.remove();
     document.getElementById(SETTINGS_ID)?.remove();
