@@ -73,6 +73,9 @@ let chatListRequest = 0;
 let summaryRunning = false;
 let widgetUpdateRunning = false;
 let currentGeneration = { type: '', chatId: '', startedAt: 0 };
+let characterCarouselIndex = 0;
+let characterCarouselFlipped = false;
+let characterSwipeIgnoreUntil = 0;
 let nativeFetch = null;
 let fetchWrapper = null;
 let worldInfoModulePromise = null;
@@ -240,6 +243,36 @@ function avatarUrl(entity, context = getContext()) {
     } catch {
         return '';
     }
+}
+
+function originalAvatarUrl(entity) {
+    if (!entity) return '';
+    if (entity.type === 'group') return entity.item.avatar_url || '';
+    const avatar = String(entity.item?.avatar || '').trim();
+    if (!avatar || avatar === 'none') return '';
+    if (/^(?:data:|blob:|https?:\/\/|\/)/i.test(avatar)) return avatar;
+    return '/characters/' + avatar.split('/').map(encodeURIComponent).join('/');
+}
+
+function portraitImageMarkup(entity, context, alt, className = '') {
+    const original = originalAvatarUrl(entity);
+    const fallback = avatarUrl(entity, context);
+    if (!original && !fallback) return '';
+    return '<img' + (className ? ' class="' + escapeHtml(className) + '"' : '')
+        + ' src="' + escapeHtml(original || fallback) + '"'
+        + (fallback && fallback !== original ? ' data-fallback="' + escapeHtml(fallback) + '"' : '')
+        + ' alt="' + escapeHtml(alt || '') + '" loading="eager" decoding="async" draggable="false">';
+}
+
+function wireImageFallbacks(scope = document) {
+    scope.querySelectorAll?.('img[data-fallback]').forEach((image) => {
+        image.addEventListener('error', () => {
+            const fallback = image.dataset.fallback;
+            if (!fallback || image.dataset.fallbackUsed === 'true') return;
+            image.dataset.fallbackUsed = 'true';
+            image.src = fallback;
+        }, { once: true });
+    });
 }
 
 function entityRole(entity) {
@@ -889,14 +922,15 @@ function renderDetail() {
     const profile = entity?.type === 'group'
         ? '群組成員：' + (entity.item.members?.length || 0) + ' 人'
         : truncate(data.description || entity?.item?.description || data.personality || '角色卡未填寫簡介。', 180);
-    const url = avatarUrl(entity, context);
+    const portrait = portraitImageMarkup(entity, context, name);
     const art = document.getElementById('mol-art-card');
     if (art) {
         art.innerHTML = [
             '<span class="mol-art-index">NO. ' + String(context.chat?.length || 0).padStart(2, '0') + '</span>',
-            '<div class="mol-portrait">' + (url ? '<img src="' + escapeHtml(url) + '" alt="">' : '<span>' + escapeHtml(initials(name)) + '</span>') + '<i class="one"></i><i class="two"></i></div>',
+            '<div class="mol-portrait">' + (portrait || '<span>' + escapeHtml(initials(name)) + '</span>') + '<i class="one"></i><i class="two"></i></div>',
             '<p>THE CURATOR<br>OF BLUE HOURS</p>',
         ].join('');
+        wireImageFallbacks(art);
     }
     document.getElementById('mol-profile-name').textContent = name;
     document.getElementById('mol-profile-note').textContent = profile;
@@ -1295,19 +1329,46 @@ async function openWorldEntryEditor(name, uid = null) {
     activeDialogCleanup = () => form.removeEventListener('submit', handler);
 }
 
-function openCharacterOverview() {
+function openCharacterOverview(index = characterCarouselIndex, flipped = false) {
     closeDialog();
     const context = getContext();
     const layer = document.getElementById('mol-dialog');
     if (!context || !layer) return;
-    const cards = context.characters.map((character, id) => {
+    const characters = context.characters || [];
+    characterCarouselIndex = characters.length ? Math.max(0, Math.min(characters.length - 1, Number(index) || 0)) : 0;
+    characterCarouselFlipped = Boolean(flipped);
+    let card = '<div class="mol-character-empty"><strong>目前沒有角色</strong><p>可新增角色，或匯入 JSON、PNG、YAML、CHARX、BYAF 角色卡。</p></div>';
+    if (characters.length) {
+        const id = characterCarouselIndex;
+        const character = characters[id];
+        const data = character.data || {};
+        const name = character.name || data.name || '未命名角色';
         const entity = { type: 'character', item: character, id };
-        const url = avatarUrl(entity, context);
-        const description = character.data?.description || character.description || character.data?.personality || '尚未填寫角色簡介。';
-        return '<article class="mol-character-card"><div class="mol-avatar">' + (url ? '<img src="' + escapeHtml(url) + '" alt="">' : '<span>' + escapeHtml(initials(character.name)) + '</span>') + '</div><div><strong>' + escapeHtml(character.name || '未命名角色') + '</strong><small>' + escapeHtml(truncate(description, 82)) + '</small></div><button data-action="view-character-card" data-character-id="' + id + '">查看</button><button data-action="edit-character-card" data-character-id="' + id + '">修改</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="png">匯出 PNG</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="json">匯出 JSON</button><button data-action="delete-character-card" data-character-id="' + id + '" class="danger">刪除</button><button class="primary" data-action="select-overview-character" data-character-id="' + id + '">進入聊天室</button></article>';
-    }).join('');
-    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER ARCHIVE</p><h3>角色總覽</h3><div class="mol-panel-toolbar"><button class="primary" data-action="new-character-card"><i class="fa-solid fa-plus"></i> 新增角色</button><button data-action="import-character-card"><i class="fa-solid fa-file-import"></i> 匯入角色卡</button><button data-action="refresh-character-overview"><i class="fa-solid fa-rotate"></i> 重新整理</button></div><input id="mol-character-import" type="file" accept=".json,.png,.yaml,.yml,.charx,.byaf" multiple hidden><div class="mol-character-grid">' + (cards || '<p class="mol-dialog-copy">目前沒有角色。</p>') + '</div></div>';
+        const image = portraitImageMarkup(entity, context, name, 'mol-character-portrait-image');
+        const field = (label, value) => '<section><span>' + label + '</span><p>' + escapeHtml(value || '—').replaceAll('\n', '<br>') + '</p></section>';
+        const dots = characters.map((_, dotIndex) => '<button type="button" class="mol-carousel-dot' + (dotIndex === id ? ' active' : '') + '" data-action="character-carousel-go" data-character-index="' + dotIndex + '" aria-label="前往第 ' + (dotIndex + 1) + ' 張角色卡"></button>').join('');
+        card = [
+            '<div class="mol-character-carousel" data-character-index="' + id + '">',
+            '<div class="mol-carousel-count"><span>FRAME ' + String(id + 1).padStart(2, '0') + '</span><strong>' + (id + 1) + ' / ' + characters.length + '</strong></div>',
+            '<div class="mol-frame-stage">',
+            '<button type="button" class="mol-carousel-nav previous" data-action="character-carousel-previous" aria-label="上一張角色卡"' + (characters.length < 2 ? ' disabled' : '') + '><i class="fa-solid fa-chevron-left"></i><span>上一張</span></button>',
+            '<article class="mol-character-frame-shell">',
+            '<div class="mol-character-flip' + (characterCarouselFlipped ? ' is-flipped' : '') + '"><div class="mol-character-flip-inner">',
+            '<button type="button" class="mol-character-face mol-character-front" data-action="toggle-character-flip" aria-label="翻面查看 ' + escapeHtml(name) + ' 的角色資訊">',
+            '<span class="mol-frame-ornament" aria-hidden="true"></span><span class="mol-character-image-wrap">' + (image || '<span class="mol-character-image-fallback">' + escapeHtml(initials(name)) + '</span>') + '</span>',
+            '<span class="mol-character-nameplate"><strong>' + escapeHtml(name) + '</strong><small>' + escapeHtml(data.personality || character.personality || '角色卡') + '</small></span><span class="mol-flip-hint"><i class="fa-solid fa-rotate"></i> 點擊翻面</span></button>',
+            '<section class="mol-character-face mol-character-back" aria-label="' + escapeHtml(name) + ' 的角色資訊"><span class="mol-frame-ornament" aria-hidden="true"></span>',
+            '<div class="mol-character-back-heading"><div><p class="mol-eyebrow">CHARACTER CARD</p><h4>' + escapeHtml(name) + '</h4></div><button type="button" data-action="toggle-character-flip" title="翻回圖片"><i class="fa-solid fa-rotate-left"></i></button></div>',
+            '<div class="mol-character-back-scroll">' + field('DESCRIPTION', data.description || character.description) + field('PERSONALITY', data.personality || character.personality) + field('SCENARIO', data.scenario) + field('FIRST MESSAGE', data.first_mes || character.first_mes) + '</div>',
+            '<div class="mol-character-card-actions"><button data-action="edit-character-card" data-character-id="' + id + '">修改</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="png">匯出 PNG</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="json">匯出 JSON</button><button data-action="delete-character-card" data-character-id="' + id + '" class="danger">刪除</button><button class="primary" data-action="select-overview-character" data-character-id="' + id + '">進入聊天室</button></div>',
+            '</section></div></div></article>',
+            '<button type="button" class="mol-carousel-nav next" data-action="character-carousel-next" aria-label="下一張角色卡"' + (characters.length < 2 ? ' disabled' : '') + '><span>下一張</span><i class="fa-solid fa-chevron-right"></i></button>',
+            '</div><div class="mol-carousel-dots" aria-label="角色卡頁面">' + dots + '</div><p class="mol-carousel-help">點擊卡片翻面 · 向右滑下一張 · 向左滑上一張</p></div>',
+        ].join('');
+    }
+    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-character-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER ARCHIVE</p><h3>角色總覽</h3><div class="mol-panel-toolbar"><button class="primary" data-action="new-character-card"><i class="fa-solid fa-plus"></i> 新增角色</button><button data-action="import-character-card"><i class="fa-solid fa-file-import"></i> 匯入角色卡</button><button data-action="refresh-character-overview"><i class="fa-solid fa-rotate"></i> 重新整理</button></div><input id="mol-character-import" type="file" accept=".json,.png,.yaml,.yml,.charx,.byaf" multiple hidden>' + card + '</div>';
     layer.hidden = false;
+    wireImageFallbacks(layer);
     const input = layer.querySelector('#mol-character-import');
     const onChange = async () => {
         try {
@@ -1315,14 +1376,50 @@ function openCharacterOverview() {
             input.value = '';
             await context.getCharacters();
             await loadChatEntries();
-            openCharacterOverview();
+            openCharacterOverview(context.characters.length - 1, false);
         } catch (error) {
             console.error('[墨藍藝廊] 匯入角色卡失敗', error);
             notify('角色卡匯入失敗，請確認檔案格式。', 'error');
         }
     };
     input.addEventListener('change', onChange);
-    activeDialogCleanup = () => input.removeEventListener('change', onChange);
+    const stage = layer.querySelector('.mol-frame-stage');
+    let startX = 0;
+    let startY = 0;
+    let pointerId = null;
+    const onPointerDown = (event) => {
+        if (characters.length < 2 || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        pointerId = event.pointerId;
+        startX = event.clientX;
+        startY = event.clientY;
+        stage?.setPointerCapture?.(event.pointerId);
+    };
+    const onPointerUp = (event) => {
+        if (pointerId !== event.pointerId) return;
+        const deltaX = event.clientX - startX;
+        const deltaY = event.clientY - startY;
+        pointerId = null;
+        if (Math.abs(deltaX) < 52 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
+        characterSwipeIgnoreUntil = Date.now() + 360;
+        const nextIndex = deltaX > 0
+            ? (characterCarouselIndex + 1) % characters.length
+            : (characterCarouselIndex - 1 + characters.length) % characters.length;
+        openCharacterOverview(nextIndex, false);
+    };
+    const onKeyDown = (event) => {
+        if (characters.length < 2) return;
+        if (event.key === 'ArrowRight') openCharacterOverview((characterCarouselIndex + 1) % characters.length, false);
+        if (event.key === 'ArrowLeft') openCharacterOverview((characterCarouselIndex - 1 + characters.length) % characters.length, false);
+    };
+    stage?.addEventListener('pointerdown', onPointerDown);
+    stage?.addEventListener('pointerup', onPointerUp);
+    layer.addEventListener('keydown', onKeyDown);
+    activeDialogCleanup = () => {
+        input.removeEventListener('change', onChange);
+        stage?.removeEventListener('pointerdown', onPointerDown);
+        stage?.removeEventListener('pointerup', onPointerUp);
+        layer.removeEventListener('keydown', onKeyDown);
+    };
 }
 
 function openCharacterCard(id) {
@@ -2073,8 +2170,24 @@ async function handleRootClick(event) {
         case 'focus': focusMode = !focusMode; renderHeader(); break;
         case 'world-info': openInternalPanel('world-info'); break;
         case 'refresh-world-info': openInternalPanel('world-info'); break;
-        case 'character-overview': openCharacterOverview(); break;
-        case 'refresh-character-overview': await context.getCharacters(); openCharacterOverview(); break;
+        case 'character-overview': openCharacterOverview(0, false); break;
+        case 'refresh-character-overview': await context.getCharacters(); openCharacterOverview(characterCarouselIndex, false); break;
+        case 'toggle-character-flip':
+            if (Date.now() < characterSwipeIgnoreUntil) break;
+            characterCarouselFlipped = !characterCarouselFlipped;
+            document.querySelector('#mol-dialog .mol-character-flip')?.classList.toggle('is-flipped', characterCarouselFlipped);
+            break;
+        case 'character-carousel-next': {
+            const count = context.characters?.length || 0;
+            if (count) openCharacterOverview((characterCarouselIndex + 1) % count, false);
+            break;
+        }
+        case 'character-carousel-previous': {
+            const count = context.characters?.length || 0;
+            if (count) openCharacterOverview((characterCarouselIndex - 1 + count) % count, false);
+            break;
+        }
+        case 'character-carousel-go': openCharacterOverview(Number(actionElement.dataset.characterIndex), false); break;
         case 'new-character-card': await openCharacterEditor(); break;
         case 'import-character-card': document.getElementById('mol-character-import')?.click(); break;
         case 'view-character-card': openCharacterCard(actionElement.dataset.characterId); break;
