@@ -69,6 +69,7 @@ let blockedGenerationUntil = 0;
 let groupReplyBatchActive = false;
 let groupDraftOverLimit = false;
 const groupReplyCounts = new Map();
+const MAX_GROUP_MEMBERS = 5;
 let chatEntries = [];
 let chatListLoading = false;
 let chatListRequest = 0;
@@ -748,6 +749,11 @@ function applyMemoryInjection() {
         ? '目前聊天室套用了互動式狀態小工具「' + widget.name + '」。請在回覆時遵守以下狀態規則，但不要在正文輸出 HTML、JSON 或狀態欄。\n\n規則：' + widget.instruction + '\n\n目前狀態：\n' + JSON.stringify(Object.fromEntries(widget.states.map((state) => [state.key, state.value])))
         : '';
     context.setExtensionPrompt('molan_gallery_creator_widget', widgetValue, 0, 0, false, 0);
+    const entity = currentEntity(context);
+    const groupValue = entity?.type === 'group'
+        ? '目前是多人群組聊天。每位角色只依自己的角色卡、世界書、後台提示、已知資訊與聊天上下文回覆，維持各自口吻、立場、關係及知識邊界。像真人群聊一樣自然判斷是否需要發言，不必讓所有成員每輪都出聲，不要重複其他角色已說過的內容，也不要替使用者說話、決定動作或描述未表達的內心。單一角色在同一輪玩家訊息後最多回覆 2 次。'
+        : '';
+    context.setExtensionPrompt('molan_gallery_group_chat_rules', groupValue, 0, 0, false, 0);
 }
 
 function downloadBlob(blob, filename) {
@@ -869,6 +875,7 @@ function createRoot() {
         '    <button data-filter="all" class="active">全部</button>',
         '    <button data-filter="group">群組</button>',
         '  </div>',
+        '  <button id="mol-create-group-button" class="mol-create-group-button" data-action="create-group" hidden><i class="fa-solid fa-user-group"></i><span>建立群組</span><small>指定 1–5 張角色卡</small></button>',
         '  <div id="mol-entity-list" class="mol-entity-list"></div>',
         '  <div class="mol-list-note"><span>ISSUE 01</span><p>每一次對話，都是尚未裝框的作品。</p></div>',
         '</aside>',
@@ -1392,6 +1399,9 @@ async function saveGroupConfiguration(group, patch) {
     const context = getContext();
     const next = { ...group, ...patch };
     next.members = Array.from(new Set((next.members || []).filter(Boolean)));
+    if (!next.members.length || next.members.length > MAX_GROUP_MEMBERS) {
+        throw new Error('Group members must contain 1–' + MAX_GROUP_MEMBERS + ' characters');
+    }
     next.disabled_members = (next.disabled_members || []).filter((avatar) => next.members.includes(avatar));
     const response = await fetch('/api/groups/edit', {
         method: 'POST',
@@ -1405,47 +1415,154 @@ async function saveGroupConfiguration(group, patch) {
     refreshAll();
 }
 
-async function openGroupMembersPanel() {
+function groupCharacterChoiceMarkup(context, character, selected) {
+    const entityMarkup = { type: 'character', item: character, id: context.characters.indexOf(character) };
+    const avatar = portraitImageMarkup(entityMarkup, context, character.name, '');
+    return [
+        '<label class="mol-group-member-card' + (selected ? ' joined' : '') + '">',
+        '<input type="checkbox" name="members" value="' + escapeHtml(character.avatar) + '"' + (selected ? ' checked' : '') + '>',
+        '<span class="mol-group-member-avatar">' + (avatar || '<span>' + escapeHtml(initials(character.name)) + '</span>') + '</span>',
+        '<span class="mol-group-member-copy"><strong>' + escapeHtml(character.name || '未命名角色') + '</strong><small>' + escapeHtml(truncate(character.data?.personality || character.description || '角色卡', 70)) + '</small><em>' + (selected ? '已選擇' : '點擊加入群聊') + '</em></span>',
+        '<span class="mol-group-member-check"><i class="fa-solid fa-check"></i></span>',
+        '</label>',
+    ].join('');
+}
+
+async function createNativeGroup(name, members, activationStrategy) {
+    const context = getContext();
+    const chatName = 'molan-' + Date.now();
+    const payload = {
+        name,
+        members,
+        avatar_url: '',
+        allow_self_responses: false,
+        hideMutedSprites: false,
+        activation_strategy: activationStrategy,
+        generation_mode: 0,
+        disabled_members: [],
+        fav: false,
+        chat_id: chatName,
+        chats: [chatName],
+        auto_mode_delay: 5,
+    };
+    const response = await fetch('/api/groups/create', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error('Group create failed: ' + response.status);
+    const data = await response.json();
+    if (!data?.id) throw new Error('Group create response did not include an id');
+    const api = await getGroupApi();
+    await api.getGroups?.();
+    await context.openGroupChat(String(data.id), chatName);
+    enterInspectionMode();
+    applyMemoryInjection();
+    activeFilter = 'group';
+    document.querySelectorAll('#' + ROOT_ID + ' [data-filter]').forEach((button) => button.classList.toggle('active', button.dataset.filter === 'group'));
+    const createButton = document.getElementById('mol-create-group-button');
+    if (createButton) createButton.hidden = false;
+    closeDialog();
+    refreshAll();
+    await loadChatEntries();
+}
+
+async function openGroupEditorDialog(group = null) {
     closeDialog();
     const context = getContext();
-    const entity = currentEntity(context);
     const layer = document.getElementById('mol-dialog');
     if (!layer) return;
-    if (!entity || entity.type !== 'group') {
-        notify('請先開啟群組聊天室。', 'warning');
-        return;
-    }
-    const group = entity.item;
-    const memberSet = new Set(group.members || []);
+    const memberSet = new Set(group?.members || []);
     const characters = (context.characters || []).filter((character) => character?.avatar).sort((a, b) => {
         const memberOrder = Number(memberSet.has(b.avatar)) - Number(memberSet.has(a.avatar));
         return memberOrder || String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant');
     });
-    const strategyNames = ['自然判斷', '依群組順序', '輪替選擇', '手動指定'];
-    const strategy = Number(group.activation_strategy || 0);
-    const cards = characters.length ? characters.map((character) => {
-        const joined = memberSet.has(character.avatar);
-        const disabled = joined && (group.disabled_members || []).includes(character.avatar);
-        const entityMarkup = { type: 'character', item: character, id: context.characters.indexOf(character) };
-        const avatar = portraitImageMarkup(entityMarkup, context, character.name, '');
-        return [
-            '<article class="mol-group-member-card' + (joined ? ' joined' : '') + '">',
-            '<span class="mol-group-member-avatar">' + (avatar || '<span>' + escapeHtml(initials(character.name)) + '</span>') + '</span>',
-            '<span class="mol-group-member-copy"><strong>' + escapeHtml(character.name || '未命名角色') + '</strong><small>' + escapeHtml(truncate(character.data?.personality || character.description || '角色卡', 70)) + '</small><em>' + (joined ? (disabled ? '已加入 · 後台停用' : '已加入群聊') : '尚未加入') + '</em></span>',
-            joined
-                ? '<button class="danger" data-action="remove-group-member" data-character-avatar="' + escapeHtml(character.avatar) + '">移出</button>'
-                : '<button class="primary" data-action="add-group-member" data-character-avatar="' + escapeHtml(character.avatar) + '">加入群聊</button>',
-            '</article>',
-        ].join('');
-    }).join('') : '<div class="mol-profile-empty"><i class="fa-solid fa-user-slash"></i><strong>目前沒有可加入的角色卡</strong><span>請先建立或匯入角色卡。</span></div>';
+    const initialStrategy = Number(group?.activation_strategy ?? 0);
+    const strategy = initialStrategy === 2 ? 0 : initialStrategy;
+    const cards = characters.length
+        ? characters.map((character) => groupCharacterChoiceMarkup(context, character, memberSet.has(character.avatar))).join('')
+        : '<div class="mol-profile-empty"><i class="fa-solid fa-user-slash"></i><strong>目前沒有可選擇的角色卡</strong><span>請先建立或匯入角色卡。</span></div>';
     layer.innerHTML = [
-        '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">GROUP MEMBERS</p><h3>' + escapeHtml(group.name || '群組') + '・群組成員</h3>',
-        '<div class="mol-group-reply-status"><span><strong>角色主動回覆</strong><small>目前策略：' + escapeHtml(strategyNames[strategy] || '後台設定') + '。每次玩家傳送後，角色會讀取自己的角色卡、世界書、後台提示與聊天上下文；每名角色單輪最多回覆 2 次。</small></span>' + (strategy === 3 ? '<button class="primary" data-action="enable-group-auto-replies">啟用自然回覆</button>' : '<em><i class="fa-solid fa-circle-check"></i> 已啟用</em>') + '</div>',
+        '<form class="mol-dialog mol-panel-dialog mol-wide-dialog mol-group-editor"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">' + (group ? 'EDIT GROUP' : 'NEW GROUP') + '</p><h3>' + (group ? '編輯群組成員' : '建立群組聊天') + '</h3>',
+        '<div class="mol-group-editor-fields"><label><span>群組名稱</span><input type="text" name="group_name" required maxlength="80" value="' + escapeHtml(group?.name || '') + '" placeholder="例如：夜間策展組"></label><label><span>回覆方式</span><select name="activation_strategy"><option value="0"' + (strategy === 0 ? ' selected' : '') + '>自然判斷（推薦）</option><option value="1"' + (strategy === 1 ? ' selected' : '') + '>依群組順序</option><option value="3"' + (strategy === 3 ? ' selected' : '') + '>輪替選擇</option></select></label></div>',
+        '<div class="mol-group-reply-status"><span><strong>真人感群組回覆</strong><small>角色會讀取自己的角色卡、世界書、後台設定與聊天上下文，維持各自口吻與知識邊界；不強迫所有角色每輪發言。每名角色單輪最多回覆 2 次。</small></span><em><i class="fa-solid fa-circle-check"></i> 原生生成</em></div>',
+        '<div class="mol-group-selection-heading"><span>選擇角色卡</span><strong id="mol-group-selection-count">' + memberSet.size + ' / ' + MAX_GROUP_MEMBERS + '</strong></div>',
         '<div class="mol-group-member-list">' + cards + '</div>',
-        '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div></div>',
+        '<div class="mol-dialog-actions"><button type="button" data-action="close-dialog">取消</button><button type="submit" class="primary"' + (!characters.length ? ' disabled' : '') + '>' + (group ? '儲存群組' : '建立並進入群聊') + '</button></div></form>',
     ].join('');
     layer.hidden = false;
     wireImageFallbacks(layer);
+    const form = layer.querySelector('form');
+    const checkboxes = Array.from(form.querySelectorAll('input[name="members"]'));
+    const counter = form.querySelector('#mol-group-selection-count');
+    const submit = form.querySelector('button[type="submit"]');
+    const updateSelection = (changed = null) => {
+        let selected = checkboxes.filter((checkbox) => checkbox.checked);
+        if (selected.length > MAX_GROUP_MEMBERS && changed) {
+            changed.checked = false;
+            selected = checkboxes.filter((checkbox) => checkbox.checked);
+            notify('群組最多只能選擇 ' + MAX_GROUP_MEMBERS + ' 名角色。', 'warning');
+        }
+        for (const checkbox of checkboxes) {
+            checkbox.disabled = !checkbox.checked && selected.length >= MAX_GROUP_MEMBERS;
+            const card = checkbox.closest('.mol-group-member-card');
+            card?.classList.toggle('joined', checkbox.checked);
+            const status = card?.querySelector('em');
+            if (status) status.textContent = checkbox.checked ? '已選擇' : '點擊加入群聊';
+        }
+        if (counter) counter.textContent = selected.length + ' / ' + MAX_GROUP_MEMBERS;
+        if (submit) submit.disabled = selected.length < 1 || selected.length > MAX_GROUP_MEMBERS;
+    };
+    const onChange = (event) => updateSelection(event.target);
+    const onSubmit = async (event) => {
+        event.preventDefault();
+        const name = String(new FormData(form).get('group_name') || '').trim();
+        const members = checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value);
+        const activationStrategy = Number(new FormData(form).get('activation_strategy') || 0);
+        if (!name) { notify('請輸入群組名稱。', 'warning'); return; }
+        if (!members.length || members.length > MAX_GROUP_MEMBERS) { notify('請選擇 1–' + MAX_GROUP_MEMBERS + ' 名角色。', 'warning'); return; }
+        submit.disabled = true;
+        try {
+            if (group) {
+                await saveGroupConfiguration(group, {
+                    name,
+                    members,
+                    activation_strategy: activationStrategy,
+                    disabled_members: (group.disabled_members || []).filter((avatar) => members.includes(avatar)),
+                });
+                closeDialog();
+                applyMemoryInjection();
+                notify('群組成員與回覆方式已更新。');
+            } else {
+                await createNativeGroup(name, members, activationStrategy);
+                notify('群組已建立，可直接開始聊天。');
+            }
+        } catch (error) {
+            console.error('[墨藍藝廊] 群組儲存失敗', error);
+            notify(group ? '群組更新失敗，原設定仍會保留。' : '群組建立失敗，請稍後再試。', 'error');
+            submit.disabled = false;
+        }
+    };
+    checkboxes.forEach((checkbox) => checkbox.addEventListener('change', onChange));
+    form.addEventListener('submit', onSubmit);
+    activeDialogCleanup = () => {
+        checkboxes.forEach((checkbox) => checkbox.removeEventListener('change', onChange));
+        form.removeEventListener('submit', onSubmit);
+    };
+    updateSelection();
+}
+
+async function openGroupMembersPanel() {
+    const entity = currentEntity(getContext());
+    if (!entity || entity.type !== 'group') {
+        notify('請先開啟群組聊天室。', 'warning');
+        return;
+    }
+    await openGroupEditorDialog(entity.item);
+}
+
+async function openCreateGroupDialog() {
+    await openGroupEditorDialog(null);
 }
 
 function openMoreDialog() {
@@ -2881,6 +2998,8 @@ async function handleRootClick(event) {
     if (filter) {
         activeFilter = filter.dataset.filter;
         document.querySelectorAll('#' + ROOT_ID + ' [data-filter]').forEach((button) => button.classList.toggle('active', button === filter));
+        const createGroupButton = document.getElementById('mol-create-group-button');
+        if (createGroupButton) createGroupButton.hidden = activeFilter !== 'group';
         renderEntityList();
         return;
     }
@@ -3135,58 +3254,8 @@ async function handleRootClick(event) {
         }
         case 'relationship': openRelationshipDialog(); break;
         case 'relationship-help': openRelationshipHelpDialog(); break;
+        case 'create-group': await openCreateGroupDialog(); break;
         case 'group-members': await openGroupMembersPanel(); break;
-        case 'add-group-member': {
-            const entity = currentEntity(context);
-            const avatar = actionElement.dataset.characterAvatar || '';
-            if (!entity || entity.type !== 'group' || !avatar) break;
-            try {
-                await saveGroupConfiguration(entity.item, {
-                    members: [...(entity.item.members || []), avatar],
-                    disabled_members: (entity.item.disabled_members || []).filter((item) => item !== avatar),
-                });
-                notify('角色已加入「' + (entity.item.name || '群組') + '」。');
-                await openGroupMembersPanel();
-            } catch (error) {
-                console.error('[墨藍藝廊] 加入群組角色失敗', error);
-                notify('角色加入群聊失敗，請重新整理後重試。', 'error');
-            }
-            break;
-        }
-        case 'remove-group-member': {
-            const entity = currentEntity(context);
-            const avatar = actionElement.dataset.characterAvatar || '';
-            if (!entity || entity.type !== 'group' || !avatar) break;
-            if ((entity.item.members || []).length <= 1) {
-                notify('群組至少需要保留一名角色。', 'warning');
-                break;
-            }
-            try {
-                await saveGroupConfiguration(entity.item, {
-                    members: (entity.item.members || []).filter((item) => item !== avatar),
-                    disabled_members: (entity.item.disabled_members || []).filter((item) => item !== avatar),
-                });
-                notify('角色已移出目前群聊。');
-                await openGroupMembersPanel();
-            } catch (error) {
-                console.error('[墨藍藝廊] 移出群組角色失敗', error);
-                notify('角色移出群聊失敗，請重新整理後重試。', 'error');
-            }
-            break;
-        }
-        case 'enable-group-auto-replies': {
-            const entity = currentEntity(context);
-            if (!entity || entity.type !== 'group') break;
-            try {
-                await saveGroupConfiguration(entity.item, { activation_strategy: 0 });
-                notify('群組已啟用自然主動回覆。');
-                await openGroupMembersPanel();
-            } catch (error) {
-                console.error('[墨藍藝廊] 啟用群組主動回覆失敗', error);
-                notify('無法更新群組回覆策略。', 'error');
-            }
-            break;
-        }
         case 'generate-memory-summary': break;
         case 'clear-memory-summary': break;
         case 'rename-chat':
@@ -3443,6 +3512,7 @@ export function onDisable() {
     blockedGenerationUntil = 0;
     context?.setExtensionPrompt?.('molan_gallery_memory_summary', '', 0, 0, false, 0);
     context?.setExtensionPrompt?.('molan_gallery_creator_widget', '', 0, 0, false, 0);
+    context?.setExtensionPrompt?.('molan_gallery_group_chat_rules', '', 0, 0, false, 0);
     window.clearTimeout(streamTimer);
     for (const { type, handler } of subscribedEvents.splice(0)) {
         if (type) context?.eventSource?.off?.(type, handler);
