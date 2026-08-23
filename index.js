@@ -1829,6 +1829,7 @@ async function exportChatTxt({ type, entityId, chatId }) {
 
 async function deleteChatEntry({ type, entityId, chatId }) {
     const context = getContext();
+    if (!context || !chatId) return;
     manualGenerationPermitUntil = 0;
     disableGroupAutoMode();
     const isCurrent = String(context.chatId || '') === String(chatId)
@@ -1837,12 +1838,16 @@ async function deleteChatEntry({ type, entityId, chatId }) {
         const api = await getGroupApi();
         if (isCurrent) await api.deleteGroupChat(entityId, chatId, { jumpToNewChat: true });
         else await api.deleteGroupChatByName(entityId, chatId);
-    } else if (isCurrent) {
-        const api = await getScriptApi();
-        await api.doNewChat({ deleteCurrentChat: true });
     } else {
         const api = await getScriptApi();
+        // 無論是否為目前聊天室，都以「角色 ID + 聊天檔名」精準刪除。
+        // 避免建立新聊天室後刪除目前聊天室的流程影響同角色的其他對話。
         await api.deleteCharacterChatByName(Number(entityId), chatId);
+        if (isCurrent) {
+            enterInspectionMode({ stopActive: true });
+            await getContext()?.reloadCurrentChat?.();
+            applyMemoryInjection();
+        }
     }
     disableGroupAutoMode();
     await loadChatEntries();
