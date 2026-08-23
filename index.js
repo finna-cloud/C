@@ -2,9 +2,19 @@ const MODULE_NAME = 'molan_gallery';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
+const GENERATION_ENDPOINTS = new Set([
+    '/api/backends/chat-completions/generate',
+    '/api/backends/text-completions/generate',
+    '/api/backends/kobold/generate',
+    '/api/backends/koboldhorde/generate',
+    '/api/novelai/generate',
+    '/api/horde/generate-text',
+]);
+const EMPTY_USAGE = Object.freeze({ input: 0, output: 0, total: 0, userMessages: 0, last: null });
 const DEFAULT_SETTINGS = Object.freeze({
     autoOpen: false,
     compactMessages: false,
+    usageTotals: structuredClone(EMPTY_USAGE),
 });
 
 let initialized = false;
@@ -18,6 +28,11 @@ let detailOpen = false;
 let streamTimer = 0;
 let attachmentName = '';
 let activeDialogCleanup = null;
+let inspectionSwitchUntil = 0;
+let currentGeneration = { type: '', chatId: '', startedAt: 0 };
+let nativeFetch = null;
+let fetchWrapper = null;
+let worldInfoModulePromise = null;
 const subscribedEvents = [];
 
 function getContext() {
@@ -32,10 +47,23 @@ function getSettings() {
     }
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
         if (!Object.hasOwn(context.extensionSettings[MODULE_NAME], key)) {
-            context.extensionSettings[MODULE_NAME][key] = value;
+            context.extensionSettings[MODULE_NAME][key] = structuredClone(value);
         }
     }
+    context.extensionSettings[MODULE_NAME].usageTotals = normalizeUsage(context.extensionSettings[MODULE_NAME].usageTotals);
     return context.extensionSettings[MODULE_NAME];
+}
+
+function normalizeUsage(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    const number = (key) => Number.isFinite(Number(source[key])) ? Math.max(0, Number(source[key])) : 0;
+    return {
+        input: number('input'),
+        output: number('output'),
+        total: number('total'),
+        userMessages: number('userMessages'),
+        last: source.last && typeof source.last === 'object' ? { ...source.last } : null,
+    };
 }
 
 function escapeHtml(value) {
@@ -104,12 +132,13 @@ function entityRole(entity) {
 }
 
 function getChatMeta(context = getContext()) {
-    const defaults = { relationship: 50, memory: '' };
+    const defaults = { relationship: 50, memory: '', usage: structuredClone(EMPTY_USAGE) };
     const stored = context?.chatMetadata?.[MODULE_NAME];
     if (!stored || typeof stored !== 'object') return defaults;
     return {
         relationship: Number.isFinite(Number(stored.relationship)) ? Number(stored.relationship) : 50,
         memory: typeof stored.memory === 'string' ? stored.memory : '',
+        usage: normalizeUsage(stored.usage),
     };
 }
 
@@ -119,6 +148,135 @@ async function saveChatMeta(patch) {
     context.chatMetadata[MODULE_NAME] = { ...getChatMeta(context), ...patch };
     await context.saveMetadata();
     refreshDetail();
+}
+
+function numberText(value) {
+    return Number(value || 0).toLocaleString();
+}
+
+async function persistUsage({ chatUsage, globalUsage }) {
+    const context = getContext();
+    if (chatUsage && context?.chatMetadata) {
+        context.chatMetadata[MODULE_NAME] = { ...getChatMeta(context), usage: normalizeUsage(chatUsage) };
+        await context.saveMetadata();
+    }
+    if (globalUsage) {
+        getSettings().usageTotals = normalizeUsage(globalUsage);
+        context?.saveSettingsDebounced?.();
+    }
+    if (isOpen) refreshDetail();
+}
+
+async function recordUserMessage() {
+    const context = getContext();
+    if (!context?.chatMetadata) return;
+    const chatUsage = getChatMeta(context).usage;
+    const globalUsage = getSettings().usageTotals;
+    chatUsage.userMessages += 1;
+    globalUsage.userMessages += 1;
+    await persistUsage({ chatUsage, globalUsage });
+}
+
+async function recordApiUsage(usage, requestType) {
+    const context = getContext();
+    if (!context?.chatMetadata) return;
+    const chatUsage = getChatMeta(context).usage;
+    const globalUsage = getSettings().usageTotals;
+    const available = Boolean(usage);
+    chatUsage.last = {
+        available,
+        input: usage?.input ?? 0,
+        output: usage?.output ?? 0,
+        total: usage?.total ?? 0,
+        type: requestType || currentGeneration.type || 'normal',
+        at: Date.now(),
+    };
+    if (available) {
+        chatUsage.input += usage.input;
+        chatUsage.output += usage.output;
+        chatUsage.total += usage.total;
+        globalUsage.input += usage.input;
+        globalUsage.output += usage.output;
+        globalUsage.total += usage.total;
+        globalUsage.last = { ...chatUsage.last };
+    }
+    await persistUsage({ chatUsage, globalUsage });
+}
+
+function parseActualUsage(text) {
+    const roots = [];
+    try { roots.push(JSON.parse(text)); } catch { /* may be SSE */ }
+    for (const line of String(text).split(/\r?\n/)) {
+        const value = line.trim();
+        if (!value.startsWith('data:')) continue;
+        const payload = value.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        try { roots.push(JSON.parse(payload)); } catch { /* ignore incomplete events */ }
+    }
+    let input = -1;
+    let output = -1;
+    let total = -1;
+    const visit = (value, seen = new WeakSet()) => {
+        if (!value || typeof value !== 'object' || seen.has(value)) return;
+        seen.add(value);
+        const usage = value.usage && typeof value.usage === 'object' ? value.usage : null;
+        const google = value.usageMetadata && typeof value.usageMetadata === 'object' ? value.usageMetadata : null;
+        const read = (source, keys) => {
+            for (const key of keys) {
+                if (Number.isFinite(Number(source?.[key]))) return Math.max(0, Number(source[key]));
+            }
+            return -1;
+        };
+        if (usage) {
+            input = Math.max(input, read(usage, ['prompt_tokens', 'input_tokens', 'promptTokens', 'inputTokens']));
+            output = Math.max(output, read(usage, ['completion_tokens', 'output_tokens', 'completionTokens', 'outputTokens']));
+            total = Math.max(total, read(usage, ['total_tokens', 'totalTokens']));
+        }
+        if (google) {
+            input = Math.max(input, read(google, ['promptTokenCount']));
+            output = Math.max(output, read(google, ['candidatesTokenCount']));
+            total = Math.max(total, read(google, ['totalTokenCount']));
+        }
+        for (const child of Object.values(value)) visit(child, seen);
+    };
+    roots.forEach((root) => visit(root));
+    if (input < 0 && output < 0 && total < 0) return null;
+    input = Math.max(0, input);
+    output = Math.max(0, output);
+    total = total >= 0 ? total : input + output;
+    return { input, output, total };
+}
+
+function installUsageCapture() {
+    if (nativeFetch || typeof globalThis.fetch !== 'function') return;
+    nativeFetch = globalThis.fetch.bind(globalThis);
+    fetchWrapper = async (...args) => {
+        const response = await nativeFetch(...args);
+        try {
+            const rawUrl = typeof args[0] === 'string' || args[0] instanceof URL ? args[0] : args[0]?.url;
+            const path = new URL(rawUrl, location.href).pathname;
+            if (GENERATION_ENDPOINTS.has(path)) {
+                const clone = response.clone();
+                const requestType = currentGeneration.type;
+                clone.text().then((body) => recordApiUsage(parseActualUsage(body), requestType)).catch(() => recordApiUsage(null, requestType));
+            }
+        } catch (error) {
+            console.debug('[墨藍藝廊] 無法讀取 API usage', error);
+        }
+        return response;
+    };
+    globalThis.fetch = fetchWrapper;
+}
+
+function restoreUsageCapture() {
+    if (nativeFetch && globalThis.fetch === fetchWrapper) globalThis.fetch = nativeFetch;
+    nativeFetch = null;
+    fetchWrapper = null;
+}
+
+function getWorldInfoApi() {
+    worldInfoModulePromise ||= import('/scripts/world-info.js');
+    return worldInfoModulePromise;
 }
 
 function createRoot() {
@@ -131,6 +289,7 @@ function createRoot() {
         '  <button class="mol-brand" data-action="close" title="關閉墨藍藝廊"><span>T</span></button>',
         '  <nav>',
         '    <button class="mol-rail-button active" data-action="show-chats" title="對話"><i class="fa-solid fa-pen-nib"></i></button>',
+        '    <button class="mol-rail-button" data-action="character-overview" title="角色總覽"><i class="fa-solid fa-address-card"></i></button>',
         '    <button class="mol-rail-button" data-action="world-info" title="世界書"><i class="fa-solid fa-book-atlas"></i></button>',
         '    <button class="mol-rail-button" data-action="continue" title="續寫"><i class="fa-solid fa-wand-magic-sparkles"></i></button>',
         '  </nav>',
@@ -176,6 +335,7 @@ function createRoot() {
         '    <button data-action="world-info"><span class="mol-context-icon"><i class="fa-solid fa-book-atlas"></i></span><span><strong>世界書</strong><small id="mol-world-count">在藝廊內查看</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="memory"><span class="mol-context-icon"><i class="fa-solid fa-leaf"></i></span><span><strong>重要記憶</strong><small id="mol-memory-summary">尚未記錄</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="generation-settings"><span class="mol-context-icon"><i class="fa-solid fa-sliders"></i></span><span><strong>生成中心</strong><small>模型、狀態與生成操作</small></span><i class="fa-solid fa-chevron-right"></i></button>',
+        '    <button data-action="usage-stats"><span class="mol-context-icon"><i class="fa-solid fa-chart-simple"></i></span><span><strong>API 用量</strong><small id="mol-usage-summary">等待實際回傳</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '  </div>',
         '  <button class="mol-model-note" data-action="generation-settings" title="在藝廊內查看生成資訊"><span>MODEL / API</span><strong id="mol-model-name">—</strong><small id="mol-stream-state">Ready</small></button>',
         '</aside>',
@@ -421,6 +581,11 @@ function renderDetail() {
     document.getElementById('mol-model-name').textContent = String(model);
     const names = context.getWorldInfoNames?.() || [];
     document.getElementById('mol-world-count').textContent = names.length ? names.length + ' 本世界書可用' : '目前沒有世界書';
+    const usage = meta.usage;
+    const usageSummary = document.getElementById('mol-usage-summary');
+    if (usageSummary) usageSummary.textContent = usage.last?.available
+        ? '本次 ' + numberText(usage.last.total) + ' · 本聊天 ' + numberText(usage.total)
+        : '尚無供應商實際用量';
 }
 
 async function updateTokenCount() {
@@ -453,6 +618,7 @@ async function selectEntity(type, id) {
     const context = getContext();
     if (!context) return;
     try {
+        inspectionSwitchUntil = Date.now() + 2000;
         if (type === 'group') {
             const group = context.groups.find((item) => String(item.id) === String(id));
             if (!group?.chat_id) {
@@ -493,8 +659,8 @@ function openTextDialog({ title, label, value = '', multiline = false, submitTex
     const handler = async (event) => {
         event.preventDefault();
         const input = new FormData(form).get('value');
-        await onSubmit(String(input ?? ''));
-        closeDialog();
+        const shouldClose = await onSubmit(String(input ?? ''));
+        if (shouldClose !== false) closeDialog();
     };
     form.addEventListener('submit', handler);
     activeDialogCleanup = () => form.removeEventListener('submit', handler);
@@ -509,8 +675,8 @@ function openConfirmDialog(title, message, onConfirm) {
     layer.hidden = false;
     const confirm = layer.querySelector('[data-action="confirm-dialog"]');
     const handler = async () => {
-        await onConfirm();
-        closeDialog();
+        const shouldClose = await onConfirm();
+        if (shouldClose !== false) closeDialog();
     };
     confirm.addEventListener('click', handler);
     activeDialogCleanup = () => confirm.removeEventListener('click', handler);
@@ -541,13 +707,242 @@ function openMoreDialog() {
         '<div class="mol-dialog mol-action-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHAT ACTIONS</p><h3>對話選項</h3>',
         '<button data-action="rename-chat"><i class="fa-solid fa-pen"></i><span>重新命名對話</span></button>',
         '<button data-action="delete-last"><i class="fa-solid fa-trash"></i><span>刪除最後訊息</span></button>',
+        '<button data-action="delete-chat" class="danger"><i class="fa-solid fa-trash-can"></i><span>刪除目前聊天室</span></button>',
         '<button data-action="user-settings"><i class="fa-solid fa-palette"></i><span>藝廊介面設定</span></button>',
         '</div>',
     ].join('');
     layer.hidden = false;
 }
 
+const MODEL_SELECTORS = {
+    openai: '#model_openai_select', claude: '#model_claude_select', openrouter: '#model_openrouter_select',
+    ai21: '#model_ai21_select', makersuite: '#model_google_select', vertexai: '#model_vertexai_select',
+    mistralai: '#model_mistralai_select', cohere: '#model_cohere_select', perplexity: '#model_perplexity_select',
+    groq: '#model_groq_select', electronhub: '#model_electronhub_select', chutes: '#model_chutes_select',
+    nanogpt: '#model_nanogpt_select', deepseek: '#model_deepseek_select', aimlapi: '#model_aimlapi_select',
+    xai: '#model_xai_select', pollinations: '#model_pollinations_select', moonshot: '#model_moonshot_select',
+    fireworks: '#model_fireworks_select', cometapi: '#model_cometapi_select', azure_openai: '#azure_openai_model',
+    zai: '#model_zai_select', siliconflow: '#model_siliconflow_select', workers_ai: '#model_workers_ai_select',
+    minimax: '#model_minimax_select', custom: '#model_custom_select',
+};
+
+function getModelSelect(context = getContext()) {
+    let selector = '';
+    if (context?.mainApi === 'openai') selector = MODEL_SELECTORS[context.chatCompletionSettings?.chat_completion_source] || '';
+    else if (context?.mainApi === 'novel') selector = '#model_novel_select';
+    else if (context?.mainApi === 'horde') selector = '#horde_model';
+    const fallbacks = [
+        selector, '#mancer_model', '#model_togetherai_select', '#ollama_model', '#model_infermaticai_select',
+        '#model_dreamgen_select', '#openrouter_model', '#vllm_model', '#aphrodite_model', '#featherless_model',
+        '#tabby_model', '#llamacpp_model', '#generic_model',
+    ].filter(Boolean);
+    for (const candidate of fallbacks) {
+        const element = document.querySelector(candidate);
+        if (element instanceof HTMLSelectElement && element.options.length) return element;
+    }
+    return null;
+}
+
+function applyModelSelection(value) {
+    const select = getModelSelect();
+    if (!select || !Array.from(select.options).some((option) => option.value === value)) {
+        notify('這個 API 尚未提供可切換的模型清單。', 'warning');
+        return;
+    }
+    select.value = value;
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    notify('模型已切換為「' + (select.selectedOptions[0]?.textContent?.trim() || value) + '」。');
+    refreshDetail();
+}
+
+async function openWorldInfoPanel() {
+    closeDialog();
+    const context = getContext();
+    const layer = document.getElementById('mol-dialog');
+    if (!context || !layer) return;
+    const names = context.getWorldInfoNames?.() || [];
+    layer.innerHTML = [
+        '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button>',
+        '<p class="mol-eyebrow">WORLD INFO</p><h3>世界書</h3>',
+        '<div class="mol-panel-toolbar"><button data-action="new-world-book" class="primary"><i class="fa-solid fa-plus"></i> 新增</button><button data-action="import-world-info"><i class="fa-solid fa-file-import"></i> 匯入</button><button data-action="refresh-world-info"><i class="fa-solid fa-rotate"></i> 重新整理</button></div>',
+        '<input id="mol-world-import" type="file" accept=".json,.png" hidden>',
+        names.length ? '<div class="mol-world-books">' + names.map((name, index) => [
+            '<article><span class="mol-book-number">' + String(index + 1).padStart(2, '0') + '</span><div><strong>' + escapeHtml(name) + '</strong><small>世界書資料</small></div>',
+            '<button data-action="edit-world-book" data-book="' + escapeHtml(name) + '">開啟／修改</button>',
+            '<button data-action="delete-world-book" data-book="' + escapeHtml(name) + '" class="danger">刪除</button></article>',
+        ].join('')).join('') + '</div>' : '<p class="mol-dialog-copy">目前沒有世界書。可新增空白世界書，或匯入 JSON／PNG。</p>',
+        '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div></div>',
+    ].join('');
+    layer.hidden = false;
+    const input = layer.querySelector('#mol-world-import');
+    const onChange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+            const baseName = file.name.replace(/\.[^.]+$/, '');
+            if ((context.getWorldInfoNames?.() || []).some((name) => String(name).toLocaleLowerCase() === baseName.toLocaleLowerCase())) {
+                notify('已有同名世界書；請先重新命名檔案或刪除舊世界書。', 'warning');
+                input.value = '';
+                return;
+            }
+            const api = await getWorldInfoApi();
+            await api.importWorldInfo(file);
+            notify('世界書已匯入。');
+            await openWorldInfoPanel();
+        } catch (error) {
+            console.error('[墨藍藝廊] 匯入世界書失敗', error);
+            notify('世界書匯入失敗，請確認檔案格式。', 'error');
+        }
+    };
+    input.addEventListener('change', onChange);
+    activeDialogCleanup = () => input.removeEventListener('change', onChange);
+}
+
+function worldEntryTitle(entry, uid) {
+    return entry?.comment?.trim() || entry?.key?.filter(Boolean)?.join('、') || '條目 #' + uid;
+}
+
+async function openWorldBookPanel(name) {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    try {
+        const api = await getWorldInfoApi();
+        const data = await api.loadWorldInfo(name);
+        const entries = Object.entries(data?.entries || {}).sort(([, a], [, b]) => Number(b.order || 0) - Number(a.order || 0));
+        layer.innerHTML = [
+            '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button>',
+            '<p class="mol-eyebrow">WORLD BOOK</p><h3>' + escapeHtml(name) + '</h3>',
+            '<div class="mol-panel-toolbar"><button data-action="world-info"><i class="fa-solid fa-arrow-left"></i> 返回</button><button class="primary" data-action="new-world-entry" data-book="' + escapeHtml(name) + '"><i class="fa-solid fa-plus"></i> 新增條目</button></div>',
+            entries.length ? '<div class="mol-world-entries">' + entries.map(([uid, entry]) => [
+                '<article><div><strong>' + escapeHtml(worldEntryTitle(entry, uid)) + '</strong><small>' + escapeHtml(truncate(entry.content || '尚無內容', 88)) + '</small></div>',
+                '<span class="mol-entry-state">' + (entry.disable ? '停用' : '啟用') + '</span>',
+                '<button data-action="edit-world-entry" data-book="' + escapeHtml(name) + '" data-uid="' + escapeHtml(uid) + '">修改</button>',
+                '<button data-action="delete-world-entry" data-book="' + escapeHtml(name) + '" data-uid="' + escapeHtml(uid) + '" class="danger">刪除</button></article>',
+            ].join('')).join('') + '</div>' : '<p class="mol-dialog-copy">這本世界書還沒有條目。</p>',
+            '</div>',
+        ].join('');
+        layer.hidden = false;
+    } catch (error) {
+        console.error('[墨藍藝廊] 讀取世界書失敗', error);
+        notify('無法讀取世界書。', 'error');
+        await openWorldInfoPanel();
+    }
+}
+
+async function openWorldEntryEditor(name, uid = null) {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    const api = await getWorldInfoApi();
+    const data = await api.loadWorldInfo(name);
+    const isNew = uid === null;
+    let entry = isNew
+        ? { ...structuredClone(api.newWorldInfoEntryTemplate || {}), key: [], keysecondary: [], comment: '', content: '', constant: false, order: 100, disable: false }
+        : data?.entries?.[uid];
+    if (!entry) {
+        notify('找不到指定的世界書條目。', 'error');
+        await openWorldBookPanel(name);
+        return;
+    }
+    layer.innerHTML = [
+        '<form class="mol-dialog mol-panel-dialog mol-wide-dialog mol-entry-form"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button>',
+        '<p class="mol-eyebrow">WORLD ENTRY</p><h3>' + (isNew ? '新增條目' : '修改條目') + '</h3>',
+        '<div class="mol-form-grid"><label><span>標題／註解</span><input name="comment" value="' + escapeHtml(entry.comment || '') + '"></label>',
+        '<label><span>順序</span><input name="order" type="number" value="' + escapeHtml(entry.order ?? 100) + '"></label>',
+        '<label class="wide"><span>主要關鍵字（逗號分隔）</span><input name="key" value="' + escapeHtml((entry.key || []).join(', ')) + '"></label>',
+        '<label class="wide"><span>次要關鍵字（逗號分隔）</span><input name="keysecondary" value="' + escapeHtml((entry.keysecondary || []).join(', ')) + '"></label>',
+        '<label class="wide"><span>內容</span><textarea name="content" rows="10">' + escapeHtml(entry.content || '') + '</textarea></label>',
+        '<label class="check"><input name="constant" type="checkbox"' + (entry.constant ? ' checked' : '') + '><span>常駐啟用</span></label>',
+        '<label class="check"><input name="disable" type="checkbox"' + (entry.disable ? ' checked' : '') + '><span>停用此條目</span></label></div>',
+        '<div class="mol-dialog-actions"><button type="button" data-action="edit-world-book" data-book="' + escapeHtml(name) + '">取消</button><button type="submit" class="primary">儲存條目</button></div></form>',
+    ].join('');
+    layer.hidden = false;
+    const form = layer.querySelector('form');
+    const handler = async (event) => {
+        event.preventDefault();
+        const values = new FormData(form);
+        const split = (value) => String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+        const patch = {
+            comment: String(values.get('comment') || '').trim(),
+            content: String(values.get('content') || ''),
+            key: split(values.get('key')),
+            keysecondary: split(values.get('keysecondary')),
+            order: Number(values.get('order') || 100),
+            constant: values.get('constant') === 'on',
+            disable: values.get('disable') === 'on',
+        };
+        if (isNew) {
+            entry = api.createWorldInfoEntry(name, data);
+            if (!entry) throw new Error('Could not create world info entry');
+            uid = String(entry.uid);
+        }
+        Object.assign(entry, patch);
+        data.entries[uid] = entry;
+        await api.saveWorldInfo(name, data, true);
+        notify('世界書條目已儲存。');
+        await openWorldBookPanel(name);
+    };
+    form.addEventListener('submit', handler);
+    activeDialogCleanup = () => form.removeEventListener('submit', handler);
+}
+
+function openCharacterOverview() {
+    closeDialog();
+    const context = getContext();
+    const layer = document.getElementById('mol-dialog');
+    if (!context || !layer) return;
+    const cards = context.characters.map((character, id) => {
+        const entity = { type: 'character', item: character, id };
+        const url = avatarUrl(entity, context);
+        const description = character.data?.description || character.description || character.data?.personality || '尚未填寫角色簡介。';
+        return '<article class="mol-character-card"><div class="mol-avatar">' + (url ? '<img src="' + escapeHtml(url) + '" alt="">' : '<span>' + escapeHtml(initials(character.name)) + '</span>') + '</div><div><strong>' + escapeHtml(character.name || '未命名角色') + '</strong><small>' + escapeHtml(truncate(description, 82)) + '</small></div><button data-action="view-character-card" data-character-id="' + id + '">查看</button><button class="primary" data-action="select-overview-character" data-character-id="' + id + '">進入聊天室</button></article>';
+    }).join('');
+    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER ARCHIVE</p><h3>角色總覽</h3><div class="mol-character-grid">' + (cards || '<p class="mol-dialog-copy">目前沒有角色。</p>') + '</div></div>';
+    layer.hidden = false;
+}
+
+function openCharacterCard(id) {
+    const context = getContext();
+    const character = context?.characters?.[Number(id)];
+    const layer = document.getElementById('mol-dialog');
+    if (!character || !layer) return;
+    const data = character.data || {};
+    const field = (label, value) => '<section><span>' + label + '</span><p>' + escapeHtml(value || '—').replaceAll('\n', '<br>') + '</p></section>';
+    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER CARD</p><h3>' + escapeHtml(character.name || data.name || '未命名角色') + '</h3><div class="mol-character-detail">' + field('DESCRIPTION', data.description || character.description) + field('PERSONALITY', data.personality) + field('SCENARIO', data.scenario) + field('CREATOR NOTES', data.creator_notes || character.creator_notes) + '</div><div class="mol-dialog-actions"><button data-action="character-overview">返回總覽</button><button class="primary" data-action="select-overview-character" data-character-id="' + Number(id) + '">進入聊天室</button></div></div>';
+    layer.hidden = false;
+}
+
+function openUsagePanel() {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    const current = getChatMeta().usage;
+    const all = getSettings().usageTotals;
+    const last = current.last;
+    const actual = last?.available;
+    layer.innerHTML = [
+        '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">ACTUAL API USAGE</p><h3>Token 與訊息統計</h3>',
+        '<p class="mol-dialog-hint">只統計 API 供應商實際回傳的 usage；供應商未回傳時不使用前端估算值替代。</p>',
+        '<div class="mol-usage-grid">',
+        '<div><span>本次輸入 TOKEN</span><strong>' + (actual ? numberText(last.input) : '未提供') + '</strong></div>',
+        '<div><span>本次模型回覆 TOKEN</span><strong>' + (actual ? numberText(last.output) : '未提供') + '</strong></div>',
+        '<div><span>本次合計</span><strong>' + (actual ? numberText(last.total) : '未提供') + '</strong></div>',
+        '<div><span>目前聊天累計</span><strong>' + numberText(current.total) + '</strong><small>輸入 ' + numberText(current.input) + ' · 回覆 ' + numberText(current.output) + '</small></div>',
+        '<div><span>全部累計</span><strong>' + numberText(all.total) + '</strong><small>輸入 ' + numberText(all.input) + ' · 回覆 ' + numberText(all.output) + '</small></div>',
+        '<div><span>真正送出訊息</span><strong>' + numberText(current.userMessages) + ' / ' + numberText(all.userMessages) + '</strong><small>目前聊天 / 全部累計</small></div>',
+        '</div><p class="mol-dialog-hint">Swipe、續寫與只重新生成模型回覆，不會增加使用者訊息次數。</p>',
+        '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div></div>',
+    ].join('');
+    layer.hidden = false;
+}
+
 function openInternalPanel(kind) {
+    if (kind === 'world-info') {
+        openWorldInfoPanel();
+        return;
+    }
     closeDialog();
     const context = getContext();
     const layer = document.getElementById('mol-dialog');
@@ -555,20 +950,19 @@ function openInternalPanel(kind) {
     let title = '';
     let eyebrow = 'MOLAN GALLERY';
     let content = '';
-    if (kind === 'world-info') {
-        title = '世界書';
-        eyebrow = 'WORLD INFO';
-        const names = context.getWorldInfoNames?.() || [];
-        content = names.length
-            ? '<div class="mol-panel-list">' + names.map((name, index) => '<div><span>' + String(index + 1).padStart(2, '0') + '</span><strong>' + escapeHtml(name) + '</strong></div>').join('') + '</div>'
-            : '<p class="mol-dialog-copy">目前聊天室沒有可用的世界書。</p>';
-        content += '<div class="mol-dialog-actions"><button data-action="refresh-world-info">重新整理</button><button class="primary" data-action="close-dialog">完成</button></div>';
-    } else if (kind === 'generation-settings') {
+    if (kind === 'generation-settings') {
         title = '生成中心';
         eyebrow = 'GENERATION';
         let model = context.mainApi || 'Unknown';
         try { model = context.getChatCompletionModel?.() || model; } catch { /* use API name */ }
+        const modelSelect = getModelSelect(context);
+        const modelOptions = modelSelect
+            ? Array.from(modelSelect.options).map((option) => '<option value="' + escapeHtml(option.value) + '"' + (option.selected ? ' selected' : '') + '>' + escapeHtml(option.textContent?.trim() || option.value) + '</option>').join('')
+            : '';
         content = [
+            '<label class="mol-model-picker"><span>目前模型</span>',
+            modelSelect ? '<select id="mol-model-select">' + modelOptions + '</select>' : '<strong>' + escapeHtml(model) + '</strong><small>目前 API 沒有可選模型清單。</small>',
+            '</label>',
             '<div class="mol-info-grid">',
             '<div><span>MODEL</span><strong>' + escapeHtml(model) + '</strong></div>',
             '<div><span>API</span><strong>' + escapeHtml(context.mainApi || 'Unknown') + '</strong></div>',
@@ -577,6 +971,7 @@ function openInternalPanel(kind) {
             '</div>',
             '<div class="mol-dialog-actions">',
             isBusy ? '<button class="primary" data-action="stop-generation">停止生成</button>' : '<button data-action="continue">續寫</button>',
+            '<button data-action="usage-stats">查看 API 用量</button>',
             '<button data-action="close-dialog">關閉</button>',
             '</div>',
         ].join('');
@@ -595,7 +990,12 @@ function openInternalPanel(kind) {
     }
     layer.innerHTML = '<div class="mol-dialog mol-panel-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog" title="關閉">×</button><p class="mol-eyebrow">' + eyebrow + '</p><h3>' + title + '</h3>' + content + '</div>';
     layer.hidden = false;
-    if (kind === 'user-settings') {
+    if (kind === 'generation-settings') {
+        const modelSelect = layer.querySelector('#mol-model-select');
+        const onModelChange = () => applyModelSelection(modelSelect.value);
+        modelSelect?.addEventListener('change', onModelChange);
+        activeDialogCleanup = () => modelSelect?.removeEventListener('change', onModelChange);
+    } else if (kind === 'user-settings') {
         const settings = getSettings();
         const autoOpen = layer.querySelector('input[name="autoOpen"]');
         const compact = layer.querySelector('input[name="compactMessages"]');
@@ -708,13 +1108,73 @@ async function handleRootClick(event) {
         case 'focus': focusMode = !focusMode; renderHeader(); break;
         case 'world-info': openInternalPanel('world-info'); break;
         case 'refresh-world-info': openInternalPanel('world-info'); break;
+        case 'character-overview': openCharacterOverview(); break;
+        case 'view-character-card': openCharacterCard(actionElement.dataset.characterId); break;
+        case 'select-overview-character':
+            closeDialog();
+            await selectEntity('character', actionElement.dataset.characterId);
+            break;
         case 'generation-settings': openInternalPanel('generation-settings'); break;
+        case 'usage-stats': openUsagePanel(); break;
         case 'user-settings': openInternalPanel('user-settings'); break;
         case 'stop-generation': context.stopGeneration(); closeDialog(); break;
         case 'new-chat': await executeNewChat(); break;
         case 'continue': closeDialog(); await continueGeneration(); break;
         case 'more': openMoreDialog(); break;
         case 'close-dialog': closeDialog(); break;
+        case 'import-world-info': document.getElementById('mol-world-import')?.click(); break;
+        case 'new-world-book':
+            openTextDialog({
+                title: '新增世界書',
+                label: '世界書名稱',
+                submitText: '建立',
+                onSubmit: async (value) => {
+                    const name = value.trim();
+                    if (!name) {
+                        notify('請輸入世界書名稱。', 'warning');
+                        return false;
+                    }
+                    const api = await getWorldInfoApi();
+                    if ((context.getWorldInfoNames?.() || []).includes(name)) {
+                        notify('已有同名世界書，請使用其他名稱。', 'warning');
+                        return false;
+                    }
+                    const created = await api.createNewWorldInfo(name, { interactive: false });
+                    if (!created) return false;
+                    notify('世界書已建立。');
+                    await openWorldBookPanel(name);
+                    return false;
+                },
+            });
+            break;
+        case 'edit-world-book': await openWorldBookPanel(actionElement.dataset.book); break;
+        case 'delete-world-book': {
+            const name = actionElement.dataset.book;
+            openConfirmDialog('刪除世界書', '確定刪除「' + name + '」？此操作無法復原。', async () => {
+                const api = await getWorldInfoApi();
+                await api.deleteWorldInfo(name);
+                notify('世界書已刪除。');
+                await openWorldInfoPanel();
+                return false;
+            });
+            break;
+        }
+        case 'new-world-entry': await openWorldEntryEditor(actionElement.dataset.book); break;
+        case 'edit-world-entry': await openWorldEntryEditor(actionElement.dataset.book, actionElement.dataset.uid); break;
+        case 'delete-world-entry': {
+            const name = actionElement.dataset.book;
+            const uid = actionElement.dataset.uid;
+            openConfirmDialog('刪除世界書條目', '確定刪除此條目？', async () => {
+                const api = await getWorldInfoApi();
+                const data = await api.loadWorldInfo(name);
+                await api.deleteWorldInfoEntry(data, Number(uid), { silent: true });
+                await api.saveWorldInfo(name, data, true);
+                notify('條目已刪除。');
+                await openWorldBookPanel(name);
+                return false;
+            });
+            break;
+        }
         case 'relationship': openRelationshipDialog(); break;
         case 'memory':
             openTextDialog({
@@ -746,6 +1206,18 @@ async function handleRootClick(event) {
             }
             openConfirmDialog('刪除最後訊息', '此操作會修改目前聊天紀錄。', async () => {
                 await context.deleteMessage(context.chat.length - 1, undefined, false);
+                refreshAll();
+            });
+            break;
+        case 'delete-chat':
+            if (!context.chatId) {
+                notify('目前沒有可刪除的聊天室。', 'warning');
+                break;
+            }
+            openConfirmDialog('刪除目前聊天室', '將永久刪除目前聊天紀錄，並建立一個新的空白對話。', async () => {
+                const { doNewChat } = await import('/script.js');
+                await doNewChat({ deleteCurrentChat: true });
+                notify('聊天室已刪除，已建立新的空白對話。');
                 refreshAll();
             });
             break;
@@ -817,15 +1289,31 @@ function subscribeToSillyTavern() {
     subscribe(events.CHARACTER_EDITED, refresh);
     subscribe(events.CHARACTER_DELETED, refresh);
     subscribe(events.PERSONA_CHANGED, refresh);
-    subscribe(events.MESSAGE_SENT, refreshMessages);
+    subscribe(events.MESSAGE_SENT, async () => {
+        try { await recordUserMessage(); } catch (error) { console.error('[墨藍藝廊] 記錄訊息次數失敗', error); }
+        refreshMessages();
+    });
     subscribe(events.MESSAGE_RECEIVED, refreshMessages);
     subscribe(events.MESSAGE_EDITED, refreshMessages);
     subscribe(events.MESSAGE_DELETED, refreshMessages);
     subscribe(events.MESSAGE_SWIPED, refreshMessages);
     subscribe(events.STREAM_TOKEN_RECEIVED, () => { if (isOpen) scheduleMessageRefresh(); });
-    subscribe(events.GENERATION_STARTED, () => { isBusy = true; if (isOpen) renderComposer(); });
+    subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
+        currentGeneration = { type: String(type || 'normal'), chatId: String(context.chatId || ''), startedAt: Date.now() };
+        if (!dryRun && Date.now() < inspectionSwitchUntil && options?.automatic_trigger === true) {
+            context.stopGeneration();
+            notify('已阻止自動生成；目前只開啟聊天室供檢視。');
+            return;
+        }
+        isBusy = true;
+        if (isOpen) renderComposer();
+    });
     subscribe(events.GENERATION_ENDED, () => { isBusy = false; if (isOpen) refreshAll(); });
     subscribe(events.GENERATION_STOPPED, () => { isBusy = false; if (isOpen) refreshAll(); });
+    subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
+    subscribe(events.MAIN_API_CHANGED, refresh);
+    subscribe(events.WORLDINFO_UPDATED, refresh);
+    subscribe(events.WORLDINFO_SETTINGS_UPDATED, refresh);
 }
 
 function handleGlobalKeydown(event) {
@@ -848,6 +1336,7 @@ function initialize() {
     createRoot();
     installLauncher();
     installSettings();
+    installUsageCapture();
     subscribeToSillyTavern();
     document.addEventListener('keydown', handleGlobalKeydown);
     document.addEventListener('change', handleFileChange, true);
@@ -880,6 +1369,7 @@ export function onDisable() {
     document.getElementById(LAUNCHER_ID)?.remove();
     document.getElementById(SETTINGS_ID)?.remove();
     document.body.classList.remove('mol-gallery-open');
+    restoreUsageCapture();
     initialized = false;
     isOpen = false;
 }

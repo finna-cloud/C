@@ -1034,6 +1034,202 @@ body.mol-gallery-open {
     margin: 16px 0 0;
 }
 
+.mol-wide-dialog {
+    width: min(860px, 100%);
+}
+
+.mol-panel-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.mol-panel-toolbar button,
+.mol-world-books button,
+.mol-world-entries button,
+.mol-character-card button {
+    padding: 8px 11px;
+    border: 1px solid var(--mol-line);
+    color: var(--mol-ink);
+    background: transparent;
+    font-size: 10px;
+}
+
+.mol-panel-toolbar button.primary,
+.mol-character-card button.primary {
+    border-color: var(--mol-blue);
+    color: #fff;
+    background: var(--mol-blue);
+}
+
+.mol-dialog button.danger,
+.mol-world-books button.danger,
+.mol-world-entries button.danger {
+    color: var(--mol-danger);
+}
+
+.mol-world-books,
+.mol-world-entries {
+    display: grid;
+    gap: 8px;
+}
+
+.mol-world-books article,
+.mol-world-entries article {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+}
+
+.mol-world-books article > div,
+.mol-world-entries article > div,
+.mol-character-card > div:not(.mol-avatar) {
+    display: grid;
+    min-width: 0;
+    gap: 4px;
+}
+
+.mol-world-books strong,
+.mol-world-entries strong,
+.mol-character-card strong {
+    overflow-wrap: anywhere;
+    font: 500 13px/1.35 "Noto Serif TC", serif;
+}
+
+.mol-world-books small,
+.mol-world-entries small,
+.mol-character-card small {
+    overflow: hidden;
+    color: var(--mol-muted);
+    font-size: 10px;
+    line-height: 1.5;
+    text-overflow: ellipsis;
+}
+
+.mol-book-number,
+.mol-entry-state {
+    color: var(--mol-blue);
+    font-size: 9px;
+    letter-spacing: .1em;
+}
+
+.mol-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 150px;
+    gap: 14px;
+}
+
+.mol-form-grid label.wide {
+    grid-column: 1 / -1;
+}
+
+.mol-form-grid label.check {
+    display: flex;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    cursor: pointer;
+}
+
+.mol-form-grid input:not([type="checkbox"]),
+.mol-model-picker select {
+    width: 100%;
+    padding: 10px 11px;
+    border: 1px solid var(--mol-line);
+    color: var(--mol-ink);
+    background: var(--mol-paper);
+}
+
+.mol-character-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.mol-character-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+}
+
+.mol-character-card .mol-avatar {
+    grid-row: span 2;
+}
+
+.mol-character-card button.primary {
+    grid-column: 2 / -1;
+}
+
+.mol-character-detail {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.mol-character-detail section {
+    padding: 14px;
+    border: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+}
+
+.mol-character-detail span,
+.mol-model-picker > span,
+.mol-usage-grid span {
+    color: var(--mol-blue);
+    font-size: 9px;
+    letter-spacing: .12em;
+}
+
+.mol-character-detail p {
+    margin: 8px 0 0;
+    font: 12px/1.7 Georgia, "Noto Serif TC", serif;
+}
+
+.mol-model-picker {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding: 14px;
+    border: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+}
+
+.mol-model-picker small {
+    color: var(--mol-muted);
+    font-size: 10px;
+}
+
+.mol-usage-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.mol-usage-grid > div {
+    display: grid;
+    gap: 7px;
+    padding: 15px;
+    border: 1px solid var(--mol-line);
+    background: var(--mol-paper);
+}
+
+.mol-usage-grid strong {
+    font: 500 20px/1.2 Georgia, "Noto Serif TC", serif;
+}
+
+.mol-usage-grid small {
+    color: var(--mol-muted);
+    font-size: 9px;
+}
+
 .mol-toast {
     position: fixed;
     z-index: 12;
@@ -1167,6 +1363,41 @@ body.mol-gallery-open {
         margin-right: auto;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .mol-dialog-layer {
+        padding: 10px;
+    }
+
+    .mol-dialog {
+        padding: 22px 18px;
+    }
+
+    .mol-world-books article,
+    .mol-world-entries article,
+    .mol-character-card {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .mol-world-books article button,
+    .mol-world-entries article button,
+    .mol-character-card button {
+        grid-column: auto;
+    }
+
+    .mol-character-card button.primary {
+        grid-column: 1 / -1;
+    }
+
+    .mol-character-grid,
+    .mol-character-detail,
+    .mol-usage-grid,
+    .mol-form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mol-form-grid label.wide {
+        grid-column: 1;
     }
 }
 
