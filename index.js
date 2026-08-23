@@ -11,6 +11,15 @@ const GENERATION_ENDPOINTS = new Set([
     '/api/horde/generate-text',
 ]);
 const EMPTY_USAGE = Object.freeze({ input: 0, output: 0, total: 0, userMessages: 0, last: null });
+const DEFAULT_MEMORY = Object.freeze({
+    enabled: false,
+    everyMessages: 20,
+    instruction: '只整理已確認、會影響後續對話的長期記憶。不要推測使用者未明說的想法，也不要虛構事件。',
+    format: '【人物與關係】\n- \n\n【已確認事件】\n- \n\n【承諾與待辦】\n- \n\n【重要物品與地點】\n- \n\n【偏好、界線與禁忌】\n- ',
+    content: '',
+    lastSummarizedCount: 0,
+    updatedAt: 0,
+});
 const DEFAULT_SETTINGS = Object.freeze({
     autoOpen: false,
     compactMessages: false,
@@ -28,11 +37,17 @@ let detailOpen = false;
 let streamTimer = 0;
 let attachmentName = '';
 let activeDialogCleanup = null;
-let inspectionSwitchUntil = 0;
+let manualGenerationPermitUntil = 0;
+let chatEntries = [];
+let chatListLoading = false;
+let chatListRequest = 0;
+let summaryRunning = false;
 let currentGeneration = { type: '', chatId: '', startedAt: 0 };
 let nativeFetch = null;
 let fetchWrapper = null;
 let worldInfoModulePromise = null;
+let scriptModulePromise = null;
+let groupModulePromise = null;
 const subscribedEvents = [];
 
 function getContext() {
@@ -63,6 +78,19 @@ function normalizeUsage(value) {
         total: number('total'),
         userMessages: number('userMessages'),
         last: source.last && typeof source.last === 'object' ? { ...source.last } : null,
+    };
+}
+
+function normalizeMemory(value, legacy = '') {
+    const source = value && typeof value === 'object' ? value : {};
+    return {
+        enabled: Boolean(source.enabled),
+        everyMessages: Math.max(5, Math.min(200, Number(source.everyMessages) || DEFAULT_MEMORY.everyMessages)),
+        instruction: typeof source.instruction === 'string' ? source.instruction : DEFAULT_MEMORY.instruction,
+        format: typeof source.format === 'string' ? source.format : DEFAULT_MEMORY.format,
+        content: typeof source.content === 'string' ? source.content : (typeof legacy === 'string' ? legacy : ''),
+        lastSummarizedCount: Math.max(0, Number(source.lastSummarizedCount) || 0),
+        updatedAt: Math.max(0, Number(source.updatedAt) || 0),
     };
 }
 
@@ -132,12 +160,13 @@ function entityRole(entity) {
 }
 
 function getChatMeta(context = getContext()) {
-    const defaults = { relationship: 50, memory: '', usage: structuredClone(EMPTY_USAGE) };
+    const defaults = { relationship: 50, memory: '', memorySummary: structuredClone(DEFAULT_MEMORY), usage: structuredClone(EMPTY_USAGE) };
     const stored = context?.chatMetadata?.[MODULE_NAME];
     if (!stored || typeof stored !== 'object') return defaults;
     return {
         relationship: Number.isFinite(Number(stored.relationship)) ? Number(stored.relationship) : 50,
         memory: typeof stored.memory === 'string' ? stored.memory : '',
+        memorySummary: normalizeMemory(stored.memorySummary, stored.memory),
         usage: normalizeUsage(stored.usage),
     };
 }
@@ -147,6 +176,7 @@ async function saveChatMeta(patch) {
     if (!context?.chatMetadata) return;
     context.chatMetadata[MODULE_NAME] = { ...getChatMeta(context), ...patch };
     await context.saveMetadata();
+    applyMemoryInjection();
     refreshDetail();
 }
 
@@ -279,6 +309,134 @@ function getWorldInfoApi() {
     return worldInfoModulePromise;
 }
 
+function getScriptApi() {
+    scriptModulePromise ||= import('/script.js');
+    return scriptModulePromise;
+}
+
+function getGroupApi() {
+    groupModulePromise ||= import('/scripts/group-chats.js');
+    return groupModulePromise;
+}
+
+function permitManualGeneration(milliseconds = 60000) {
+    manualGenerationPermitUntil = Date.now() + milliseconds;
+}
+
+function disableGroupAutoMode() {
+    const checkbox = document.getElementById('rm_group_automode');
+    if (checkbox instanceof HTMLInputElement && checkbox.checked) {
+        checkbox.checked = false;
+        checkbox.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+}
+
+function applyMemoryInjection() {
+    const context = getContext();
+    if (!context?.setExtensionPrompt) return;
+    const memory = getChatMeta(context).memorySummary;
+    const value = memory.content.trim()
+        ? '以下是使用者確認過、供後續對話參考的長期記憶。若與最新對話衝突，以最新對話為準。\n\n' + memory.content.trim()
+        : '';
+    context.setExtensionPrompt('molan_gallery_memory_summary', value, 0, 0, false, 0);
+}
+
+function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function safeFilename(value, fallback = 'export') {
+    const cleaned = String(value || '').replace(/[\\/:*?"<>|\u0000-\u001F]/g, '_').trim();
+    return cleaned || fallback;
+}
+
+async function fetchChatListForEntry(context, type, entity, id) {
+    const response = await fetch('/api/chats/search', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify({
+            query: '',
+            avatar_url: type === 'character' ? entity.avatar : null,
+            group_id: type === 'group' ? entity.id : null,
+        }),
+    });
+    if (!response.ok) return [];
+    const rows = await response.json();
+    if (!Array.isArray(rows)) return [];
+    return rows.map((row) => ({
+        type,
+        entityId: id,
+        entity,
+        chatId: String(row.file_name || '').replace(/\.jsonl$/i, ''),
+        name: entity.name || entity.data?.name || (type === 'group' ? '未命名群組' : '未命名角色'),
+        favorite: type === 'group' ? Boolean(entity.fav) : (entity.fav === true || entity.fav === 'true' || entity.data?.extensions?.fav === true),
+        preview: row.preview_message || '尚無預覽',
+        messageCount: Number(row.message_count) || 0,
+        lastMes: row.last_mes || '',
+    })).filter((row) => row.chatId);
+}
+
+async function loadChatEntries() {
+    const context = getContext();
+    if (!context) return;
+    const requestId = ++chatListRequest;
+    chatListLoading = true;
+    renderEntityList();
+    try {
+        const tasks = [
+            ...context.characters.map((character, id) => fetchChatListForEntry(context, 'character', character, id)),
+            ...context.groups.map((group) => fetchChatListForEntry(context, 'group', group, group.id)),
+        ];
+        const rows = (await Promise.all(tasks)).flat();
+        if (requestId !== chatListRequest) return;
+        chatEntries = rows.sort((a, b) => String(b.lastMes).localeCompare(String(a.lastMes)));
+    } catch (error) {
+        console.error('[墨藍藝廊] 讀取聊天室列表失敗', error);
+        if (requestId === chatListRequest) chatEntries = [];
+    } finally {
+        if (requestId === chatListRequest) {
+            chatListLoading = false;
+            renderEntityList();
+        }
+    }
+}
+
+async function selectChatEntry(type, entityId, chatId) {
+    const context = getContext();
+    if (!context) return;
+    manualGenerationPermitUntil = 0;
+    disableGroupAutoMode();
+    try {
+        if (type === 'group') {
+            const api = await getGroupApi();
+            await api.openGroupChat(entityId, chatId);
+        } else {
+            if (String(context.characterId) !== String(entityId)) {
+                await context.selectCharacterById(Number(entityId), { switchMenu: false });
+            }
+            const nextContext = getContext();
+            if (String(nextContext.chatId || '') !== String(chatId)) {
+                const api = await getScriptApi();
+                await api.openCharacterChat(chatId);
+            }
+        }
+        disableGroupAutoMode();
+        applyMemoryInjection();
+        sidebarOpen = false;
+        refreshAll();
+    } catch (error) {
+        console.error('[墨藍藝廊] 開啟聊天室失敗', error);
+        notify('無法開啟聊天室，請稍後再試。', 'error');
+    }
+}
+
 function createRoot() {
     if (document.getElementById(ROOT_ID)) return;
     const root = document.createElement('div');
@@ -295,9 +453,9 @@ function createRoot() {
         '  </nav>',
         '  <div class="mol-rail-bottom"><button class="mol-profile-dot" data-action="user-settings" title="使用者設定">U</button></div>',
         '</aside>',
-        '<aside class="mol-chat-list" aria-label="角色與群組列表">',
+        '<aside class="mol-chat-list" aria-label="聊天室列表">',
         '  <div class="mol-list-heading"><div><p class="mol-eyebrow">COLLECTION</p><h1>對話</h1></div><button class="mol-icon-button" data-action="new-chat" title="建立新對話"><i class="fa-solid fa-plus"></i></button></div>',
-        '  <label class="mol-search"><i class="fa-solid fa-magnifying-glass"></i><input id="mol-search-input" type="search" placeholder="搜尋角色、群組…" aria-label="搜尋角色與群組"></label>',
+        '  <label class="mol-search"><i class="fa-solid fa-magnifying-glass"></i><input id="mol-search-input" type="search" placeholder="搜尋聊天室、角色…" aria-label="搜尋聊天室與角色"></label>',
         '  <div class="mol-filters">',
         '    <button data-filter="all" class="active">全部</button>',
         '    <button data-filter="favorite">收藏</button>',
@@ -333,7 +491,7 @@ function createRoot() {
         '  <button class="mol-stat-row" data-action="relationship" title="調整關係值"><span>關係</span><span class="mol-stat-bar"><i id="mol-relationship-bar"></i></span><strong id="mol-relationship">50</strong></button>',
         '  <div class="mol-context-list">',
         '    <button data-action="world-info"><span class="mol-context-icon"><i class="fa-solid fa-book-atlas"></i></span><span><strong>世界書</strong><small id="mol-world-count">在藝廊內查看</small></span><i class="fa-solid fa-chevron-right"></i></button>',
-        '    <button data-action="memory"><span class="mol-context-icon"><i class="fa-solid fa-leaf"></i></span><span><strong>重要記憶</strong><small id="mol-memory-summary">尚未記錄</small></span><i class="fa-solid fa-chevron-right"></i></button>',
+        '    <button data-action="memory-summary"><span class="mol-context-icon"><i class="fa-solid fa-leaf"></i></span><span><strong>記憶自動摘要</strong><small id="mol-memory-summary">尚未建立摘要</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="generation-settings"><span class="mol-context-icon"><i class="fa-solid fa-sliders"></i></span><span><strong>生成中心</strong><small>模型、狀態與生成操作</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="usage-stats"><span class="mol-context-icon"><i class="fa-solid fa-chart-simple"></i></span><span><strong>API 用量</strong><small id="mol-usage-summary">等待實際回傳</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '  </div>',
@@ -413,35 +571,21 @@ function setOpen(value) {
     root.hidden = !isOpen;
     document.body.classList.toggle('mol-gallery-open', isOpen);
     if (isOpen) {
+        disableGroupAutoMode();
+        applyMemoryInjection();
         root.classList.toggle('compact-messages', Boolean(getSettings().compactMessages));
         refreshAll();
+        loadChatEntries();
         setTimeout(() => root.querySelector('#mol-draft')?.focus(), 0);
     } else {
         closeDialog();
     }
 }
 
-function getEntities(context = getContext()) {
-    if (!context) return [];
-    const characters = context.characters.map((item, index) => ({
-        type: 'character',
-        id: index,
-        item,
-        name: item.name || item.data?.name || '未命名角色',
-        favorite: item.fav === true || item.fav === 'true' || item.data?.extensions?.fav === true,
-        chatName: item.chat || '尚無對話',
-    }));
-    const groups = context.groups.map((item) => ({
-        type: 'group',
-        id: item.id,
-        item,
-        name: item.name || '未命名群組',
-        favorite: Boolean(item.fav),
-        chatName: item.chat_id || '尚無對話',
-    }));
-    return [...characters, ...groups]
+function getEntities() {
+    return chatEntries
         .filter((entry) => activeFilter === 'all' || (activeFilter === 'favorite' && entry.favorite) || (activeFilter === 'group' && entry.type === 'group'))
-        .filter((entry) => !searchQuery || (entry.name + ' ' + entry.chatName).toLocaleLowerCase().includes(searchQuery));
+        .filter((entry) => !searchQuery || (entry.name + ' ' + entry.chatId + ' ' + entry.preview).toLocaleLowerCase().includes(searchQuery));
 }
 
 function renderEntityList() {
@@ -449,25 +593,30 @@ function renderEntityList() {
     const host = document.getElementById('mol-entity-list');
     if (!context || !host) return;
     const current = currentEntity(context);
-    const entries = getEntities(context);
+    const entries = getEntities();
+    if (chatListLoading && !entries.length) {
+        host.innerHTML = '<div class="mol-empty"><i class="fa-solid fa-spinner fa-spin"></i> 正在讀取聊天室…</div>';
+        return;
+    }
     if (!entries.length) {
-        host.innerHTML = '<div class="mol-empty">沒有符合條件的角色或群組。</div>';
+        host.innerHTML = '<div class="mol-empty">沒有符合條件的聊天室。建立並儲存訊息後，聊天室會出現在這裡。</div>';
         return;
     }
     host.innerHTML = entries.map((entry) => {
-        const entity = { type: entry.type, item: entry.item, id: entry.id };
+        const entity = { type: entry.type, item: entry.entity, id: entry.entityId };
         const url = avatarUrl(entity, context);
-        const active = current && current.type === entry.type && String(current.id) === String(entry.id);
+        const active = current && current.type === entry.type && String(current.id) === String(entry.entityId) && String(context.chatId) === String(entry.chatId);
         const avatar = url
             ? '<img src="' + escapeHtml(url) + '" alt="">'
             : '<span>' + escapeHtml(initials(entry.name)) + '</span>';
         return [
-            '<button class="mol-chat-card' + (active ? ' active' : '') + '" data-entity-type="' + entry.type + '" data-entity-id="' + escapeHtml(entry.id) + '">',
-            '<span class="mol-avatar">' + avatar + '</span>',
-            '<span class="mol-chat-copy"><span class="mol-chat-line"><strong>' + escapeHtml(entry.name) + '</strong><small>' + (entry.favorite ? '★' : '') + '</small></span>',
-            '<span class="mol-role">' + (entry.type === 'group' ? 'GROUP' : 'CHARACTER') + '</span>',
-            '<span class="mol-preview">' + escapeHtml(entry.chatName) + '</span></span>',
-            '</button>',
+            '<article class="mol-chat-card' + (active ? ' active' : '') + '">',
+            '<button class="mol-chat-open" data-chat-type="' + entry.type + '" data-entity-id="' + escapeHtml(entry.entityId) + '" data-chat-id="' + escapeHtml(entry.chatId) + '">',
+            '<span class="mol-avatar">' + avatar + '</span><span class="mol-chat-copy"><span class="mol-chat-line"><strong>' + escapeHtml(entry.name) + '</strong><small>' + (entry.favorite ? '★' : '') + '</small></span>',
+            '<span class="mol-role">' + (entry.type === 'group' ? 'GROUP' : 'CHARACTER') + ' · ' + escapeHtml(entry.chatId) + '</span>',
+            '<span class="mol-preview">' + escapeHtml(entry.preview) + '</span></span></button>',
+            '<div class="mol-chat-card-actions"><span>' + numberText(entry.messageCount) + ' 則</span><button data-action="export-chat-entry" data-chat-type="' + entry.type + '" data-entity-id="' + escapeHtml(entry.entityId) + '" data-chat-id="' + escapeHtml(entry.chatId) + '" title="匯出 TXT"><i class="fa-solid fa-file-arrow-down"></i></button><button data-action="delete-chat-entry" data-chat-type="' + entry.type + '" data-entity-id="' + escapeHtml(entry.entityId) + '" data-chat-id="' + escapeHtml(entry.chatId) + '" title="刪除聊天室"><i class="fa-solid fa-trash"></i></button></div>',
+            '</article>',
         ].join('');
     }).join('');
 }
@@ -573,7 +722,9 @@ function renderDetail() {
     const meta = getChatMeta(context);
     document.getElementById('mol-relationship').textContent = String(meta.relationship);
     document.getElementById('mol-relationship-bar').style.width = Math.max(0, Math.min(100, meta.relationship)) + '%';
-    document.getElementById('mol-memory-summary').textContent = meta.memory ? truncate(meta.memory, 28) : '尚未記錄';
+    document.getElementById('mol-memory-summary').textContent = meta.memorySummary.content
+        ? truncate(meta.memorySummary.content, 28)
+        : (meta.memorySummary.enabled ? '已啟用，等待摘要' : '尚未建立摘要');
     let model = context.mainApi || 'Unknown';
     try {
         model = context.getChatCompletionModel?.() || model;
@@ -618,7 +769,8 @@ async function selectEntity(type, id) {
     const context = getContext();
     if (!context) return;
     try {
-        inspectionSwitchUntil = Date.now() + 2000;
+        manualGenerationPermitUntil = 0;
+        disableGroupAutoMode();
         if (type === 'group') {
             const group = context.groups.find((item) => String(item.id) === String(id));
             if (!group?.chat_id) {
@@ -629,8 +781,11 @@ async function selectEntity(type, id) {
         } else {
             await context.selectCharacterById(Number(id), { switchMenu: false });
         }
+        disableGroupAutoMode();
+        applyMemoryInjection();
         sidebarOpen = false;
         refreshAll();
+        loadChatEntries();
     } catch (error) {
         console.error('[墨藍藝廊] 切換對話失敗', error);
         notify('無法切換對話，請稍後再試。', 'error');
@@ -706,6 +861,8 @@ function openMoreDialog() {
     layer.innerHTML = [
         '<div class="mol-dialog mol-action-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHAT ACTIONS</p><h3>對話選項</h3>',
         '<button data-action="rename-chat"><i class="fa-solid fa-pen"></i><span>重新命名對話</span></button>',
+        '<button data-action="export-current-chat"><i class="fa-solid fa-file-arrow-down"></i><span>匯出對話 TXT</span></button>',
+        '<button data-action="memory-summary"><i class="fa-solid fa-brain"></i><span>記憶自動摘要</span></button>',
         '<button data-action="delete-last"><i class="fa-solid fa-trash"></i><span>刪除最後訊息</span></button>',
         '<button data-action="delete-chat" class="danger"><i class="fa-solid fa-trash-can"></i><span>刪除目前聊天室</span></button>',
         '<button data-action="user-settings"><i class="fa-solid fa-palette"></i><span>藝廊介面設定</span></button>',
@@ -897,10 +1054,25 @@ function openCharacterOverview() {
         const entity = { type: 'character', item: character, id };
         const url = avatarUrl(entity, context);
         const description = character.data?.description || character.description || character.data?.personality || '尚未填寫角色簡介。';
-        return '<article class="mol-character-card"><div class="mol-avatar">' + (url ? '<img src="' + escapeHtml(url) + '" alt="">' : '<span>' + escapeHtml(initials(character.name)) + '</span>') + '</div><div><strong>' + escapeHtml(character.name || '未命名角色') + '</strong><small>' + escapeHtml(truncate(description, 82)) + '</small></div><button data-action="view-character-card" data-character-id="' + id + '">查看</button><button class="primary" data-action="select-overview-character" data-character-id="' + id + '">進入聊天室</button></article>';
+        return '<article class="mol-character-card"><div class="mol-avatar">' + (url ? '<img src="' + escapeHtml(url) + '" alt="">' : '<span>' + escapeHtml(initials(character.name)) + '</span>') + '</div><div><strong>' + escapeHtml(character.name || '未命名角色') + '</strong><small>' + escapeHtml(truncate(description, 82)) + '</small></div><button data-action="view-character-card" data-character-id="' + id + '">查看</button><button data-action="edit-character-card" data-character-id="' + id + '">修改</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="png">匯出 PNG</button><button data-action="export-character-card" data-character-id="' + id + '" data-format="json">匯出 JSON</button><button data-action="delete-character-card" data-character-id="' + id + '" class="danger">刪除</button><button class="primary" data-action="select-overview-character" data-character-id="' + id + '">進入聊天室</button></article>';
     }).join('');
-    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER ARCHIVE</p><h3>角色總覽</h3><div class="mol-character-grid">' + (cards || '<p class="mol-dialog-copy">目前沒有角色。</p>') + '</div></div>';
+    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER ARCHIVE</p><h3>角色總覽</h3><div class="mol-panel-toolbar"><button class="primary" data-action="new-character-card"><i class="fa-solid fa-plus"></i> 新增角色</button><button data-action="import-character-card"><i class="fa-solid fa-file-import"></i> 匯入角色卡</button><button data-action="refresh-character-overview"><i class="fa-solid fa-rotate"></i> 重新整理</button></div><input id="mol-character-import" type="file" accept=".json,.png,.yaml,.yml,.charx,.byaf" multiple hidden><div class="mol-character-grid">' + (cards || '<p class="mol-dialog-copy">目前沒有角色。</p>') + '</div></div>';
     layer.hidden = false;
+    const input = layer.querySelector('#mol-character-import');
+    const onChange = async () => {
+        try {
+            for (const file of Array.from(input.files || [])) await importCharacterCardFile(file);
+            input.value = '';
+            await context.getCharacters();
+            await loadChatEntries();
+            openCharacterOverview();
+        } catch (error) {
+            console.error('[墨藍藝廊] 匯入角色卡失敗', error);
+            notify('角色卡匯入失敗，請確認檔案格式。', 'error');
+        }
+    };
+    input.addEventListener('change', onChange);
+    activeDialogCleanup = () => input.removeEventListener('change', onChange);
 }
 
 function openCharacterCard(id) {
@@ -910,8 +1082,261 @@ function openCharacterCard(id) {
     if (!character || !layer) return;
     const data = character.data || {};
     const field = (label, value) => '<section><span>' + label + '</span><p>' + escapeHtml(value || '—').replaceAll('\n', '<br>') + '</p></section>';
-    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER CARD</p><h3>' + escapeHtml(character.name || data.name || '未命名角色') + '</h3><div class="mol-character-detail">' + field('DESCRIPTION', data.description || character.description) + field('PERSONALITY', data.personality) + field('SCENARIO', data.scenario) + field('CREATOR NOTES', data.creator_notes || character.creator_notes) + '</div><div class="mol-dialog-actions"><button data-action="character-overview">返回總覽</button><button class="primary" data-action="select-overview-character" data-character-id="' + Number(id) + '">進入聊天室</button></div></div>';
+    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER CARD</p><h3>' + escapeHtml(character.name || data.name || '未命名角色') + '</h3><div class="mol-character-detail">' + field('DESCRIPTION', data.description || character.description) + field('PERSONALITY', data.personality) + field('SCENARIO', data.scenario) + field('FIRST MESSAGE', data.first_mes || character.first_mes) + field('CREATOR NOTES', data.creator_notes || character.creator_notes) + field('SYSTEM PROMPT', data.system_prompt) + '</div><div class="mol-dialog-actions"><button data-action="character-overview">返回總覽</button><button data-action="edit-character-card" data-character-id="' + Number(id) + '">修改</button><button class="primary" data-action="select-overview-character" data-character-id="' + Number(id) + '">進入聊天室</button></div></div>';
     layer.hidden = false;
+}
+
+async function importCharacterCardFile(file, preserveFileName = '') {
+    const context = getContext();
+    const extension = file.name.split('.').pop()?.toLocaleLowerCase();
+    if (!['json', 'png', 'yaml', 'yml', 'charx', 'byaf'].includes(extension)) {
+        notify('不支援的角色卡格式：' + file.name, 'warning');
+        return false;
+    }
+    const formData = new FormData();
+    formData.append('avatar', file);
+    formData.append('file_type', extension);
+    formData.append('user_name', context.name1 || 'User');
+    if (preserveFileName) formData.append('preserved_name', preserveFileName);
+    const response = await fetch('/api/characters/import', {
+        method: 'POST',
+        headers: context.getRequestHeaders({ omitContentType: true }),
+        body: formData,
+        cache: 'no-cache',
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.error) throw new Error(result.error || response.statusText || 'Import failed');
+    notify(preserveFileName ? '角色卡已更新。' : '角色卡已匯入。');
+    return true;
+}
+
+async function exportCharacterCard(id, format = 'png') {
+    const context = getContext();
+    const character = context?.characters?.[Number(id)];
+    if (!character) return;
+    const response = await fetch('/api/characters/export', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify({ format, avatar_url: character.avatar }),
+    });
+    if (!response.ok) throw new Error(response.statusText || 'Export failed');
+    downloadBlob(await response.blob(), safeFilename(character.name || 'character') + '.' + format);
+    notify('角色卡已匯出。');
+}
+
+async function getCharacterJson(character) {
+    const context = getContext();
+    const response = await fetch('/api/characters/export', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify({ format: 'json', avatar_url: character.avatar }),
+    });
+    if (!response.ok) throw new Error(response.statusText || 'Could not read character card');
+    return response.json();
+}
+
+function newCharacterCardData(values) {
+    return {
+        spec: 'chara_card_v2',
+        spec_version: '2.0',
+        data: {
+            name: values.name,
+            description: values.description,
+            personality: values.personality,
+            scenario: values.scenario,
+            first_mes: values.first_mes,
+            mes_example: values.mes_example,
+            creator_notes: values.creator_notes,
+            system_prompt: values.system_prompt,
+            post_history_instructions: '',
+            alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+        },
+    };
+}
+
+async function openCharacterEditor(id = null) {
+    closeDialog();
+    const context = getContext();
+    const layer = document.getElementById('mol-dialog');
+    if (!context || !layer) return;
+    const character = id === null ? null : context.characters[Number(id)];
+    const data = character?.data || {};
+    const value = (key, fallback = '') => escapeHtml(data[key] ?? character?.[key] ?? fallback);
+    layer.innerHTML = [
+        '<form class="mol-dialog mol-panel-dialog mol-wide-dialog mol-character-form"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER EDITOR</p><h3>' + (character ? '修改角色卡' : '新增角色卡') + '</h3>',
+        '<div class="mol-form-grid"><label><span>角色名稱</span><input name="name" required value="' + value('name') + '"></label><label><span>角色定位</span><input name="personality" value="' + value('personality') + '"></label>',
+        '<label class="wide"><span>角色描述</span><textarea name="description" rows="5">' + value('description') + '</textarea></label>',
+        '<label class="wide"><span>場景設定</span><textarea name="scenario" rows="4">' + value('scenario') + '</textarea></label>',
+        '<label class="wide"><span>第一則訊息</span><textarea name="first_mes" rows="5">' + value('first_mes') + '</textarea></label>',
+        '<label class="wide"><span>對話範例</span><textarea name="mes_example" rows="4">' + value('mes_example') + '</textarea></label>',
+        '<label class="wide"><span>創作者備註</span><textarea name="creator_notes" rows="4">' + value('creator_notes') + '</textarea></label>',
+        '<label class="wide"><span>System Prompt</span><textarea name="system_prompt" rows="4">' + value('system_prompt') + '</textarea></label></div>',
+        '<div class="mol-dialog-actions"><button type="button" data-action="character-overview">取消</button><button type="submit" class="primary">' + (character ? '儲存修改' : '建立角色') + '</button></div></form>',
+    ].join('');
+    layer.hidden = false;
+    const form = layer.querySelector('form');
+    const handler = async (event) => {
+        event.preventDefault();
+        try {
+            const formData = new FormData(form);
+            const values = Object.fromEntries(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt'].map((key) => [key, String(formData.get(key) || '')]));
+            if (!values.name.trim()) return notify('請輸入角色名稱。', 'warning');
+            let card = character ? await getCharacterJson(character) : newCharacterCardData(values);
+            card.data ||= {};
+            Object.assign(card.data, values);
+            card.name = values.name;
+            const file = new File([JSON.stringify(card)], safeFilename(values.name, 'character') + '.json', { type: 'application/json' });
+            await importCharacterCardFile(file, character?.avatar || '');
+            await context.getCharacters();
+            await loadChatEntries();
+            openCharacterOverview();
+        } catch (error) {
+            console.error('[墨藍藝廊] 儲存角色卡失敗', error);
+            notify('角色卡儲存失敗。', 'error');
+        }
+    };
+    form.addEventListener('submit', handler);
+    activeDialogCleanup = () => form.removeEventListener('submit', handler);
+}
+
+function openMemorySummaryPanel() {
+    closeDialog();
+    const context = getContext();
+    const layer = document.getElementById('mol-dialog');
+    if (!context || !layer) return;
+    const memory = getChatMeta(context).memorySummary;
+    const status = memory.updatedAt ? new Date(memory.updatedAt).toLocaleString() : '尚未產生摘要';
+    layer.innerHTML = [
+        '<form class="mol-dialog mol-panel-dialog mol-wide-dialog mol-memory-form"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">AUTO MEMORY</p><h3>記憶自動摘要</h3>',
+        '<p class="mol-dialog-hint">摘要只屬於目前聊天室。儲存後會作為系統記憶提供給後續 AI 回覆；AI 產生的內容可在下方直接修改。</p>',
+        '<div class="mol-settings-list"><label><span><strong>自動摘要</strong><small>達到設定的新增訊息數後自動更新</small></span><input name="enabled" type="checkbox"' + (memory.enabled ? ' checked' : '') + '></label></div>',
+        '<div class="mol-form-grid"><label><span>每新增幾則訊息摘要一次</span><input name="everyMessages" type="number" min="5" max="200" value="' + memory.everyMessages + '"></label><label><span>狀態</span><strong>' + escapeHtml(status) + '</strong></label>',
+        '<label class="wide"><span>提供給 AI 的摘要要求</span><textarea name="instruction" rows="5">' + escapeHtml(memory.instruction) + '</textarea></label>',
+        '<label class="wide"><span>提供給 AI 的輸出格式</span><textarea name="format" rows="9">' + escapeHtml(memory.format) + '</textarea></label>',
+        '<label class="wide"><span>AI 摘要內容（可人工修改）</span><textarea name="content" rows="13">' + escapeHtml(memory.content) + '</textarea></label></div>',
+        '<div class="mol-dialog-actions"><button type="button" data-action="clear-memory-summary">清空摘要</button><button type="button" data-action="generate-memory-summary">立即由 AI 摘要</button><button type="submit" class="primary">儲存設定與內容</button></div></form>',
+    ].join('');
+    layer.hidden = false;
+    const form = layer.querySelector('form');
+    const saveFromForm = async ({ close = true } = {}) => {
+        const values = new FormData(form);
+        const next = normalizeMemory({
+            enabled: values.get('enabled') === 'on',
+            everyMessages: Number(values.get('everyMessages')),
+            instruction: String(values.get('instruction') || '').trim(),
+            format: String(values.get('format') || '').trim(),
+            content: String(values.get('content') || '').trim(),
+            lastSummarizedCount: memory.lastSummarizedCount,
+            updatedAt: memory.updatedAt,
+        });
+        await saveChatMeta({ memorySummary: next, memory: next.content });
+        if (close) closeDialog();
+        return next;
+    };
+    const submit = async (event) => { event.preventDefault(); await saveFromForm(); notify('記憶摘要設定已儲存。'); };
+    const generate = async () => { await saveFromForm({ close: false }); await generateMemorySummary({ force: true }); };
+    const clear = async () => {
+        form.elements.content.value = '';
+        const next = await saveFromForm({ close: false });
+        next.lastSummarizedCount = 0;
+        next.updatedAt = 0;
+        await saveChatMeta({ memorySummary: next, memory: '' });
+        notify('摘要內容已清空。');
+    };
+    form.addEventListener('submit', submit);
+    layer.querySelector('[data-action="generate-memory-summary"]').addEventListener('click', generate);
+    layer.querySelector('[data-action="clear-memory-summary"]').addEventListener('click', clear);
+    activeDialogCleanup = () => {
+        form.removeEventListener('submit', submit);
+        layer.querySelector('[data-action="generate-memory-summary"]')?.removeEventListener('click', generate);
+        layer.querySelector('[data-action="clear-memory-summary"]')?.removeEventListener('click', clear);
+    };
+}
+
+async function generateMemorySummary({ force = false } = {}) {
+    const context = getContext();
+    if (!context?.chat?.length || summaryRunning) {
+        if (force && !context?.chat?.length) notify('目前聊天室沒有可摘要的訊息。', 'warning');
+        return;
+    }
+    const memory = getChatMeta(context).memorySummary;
+    if (!force && (!memory.enabled || context.chat.length - memory.lastSummarizedCount < memory.everyMessages || isBusy)) return;
+    summaryRunning = true;
+    permitManualGeneration(120000);
+    try {
+        const transcript = context.chat.map((message) => {
+            const speaker = message.is_user ? (context.name1 || '使用者') : (message.name || context.name2 || '角色');
+            return speaker + '：' + String(message.mes || '');
+        }).join('\n').slice(-60000);
+        const prompt = [
+            '你正在為角色扮演對話整理可供後續 AI 使用的長期記憶。',
+            '使用者要求：\n' + (memory.instruction || DEFAULT_MEMORY.instruction),
+            '輸出格式：\n' + (memory.format || DEFAULT_MEMORY.format),
+            memory.content ? '上一次摘要（請依新對話整合、修正，不要盲目保留已失效資訊）：\n' + memory.content : '',
+            '目前完整對話：\n' + transcript,
+            '只輸出摘要正文，不要附加解釋、前言或 Markdown 程式碼框。',
+        ].filter(Boolean).join('\n\n');
+        notify('正在產生記憶摘要…');
+        const result = await context.generateQuietPrompt({ quietPrompt: prompt, trimToSentence: false, removeReasoning: true });
+        const next = { ...memory, content: String(result || '').trim(), lastSummarizedCount: context.chat.length, updatedAt: Date.now() };
+        await saveChatMeta({ memorySummary: next, memory: next.content });
+        notify('AI 摘要已產生，可繼續人工修改。');
+        if (!document.getElementById('mol-dialog')?.hidden) openMemorySummaryPanel();
+    } catch (error) {
+        console.error('[墨藍藝廊] 產生記憶摘要失敗', error);
+        notify('記憶摘要產生失敗，請確認 API 連線。', 'error');
+    } finally {
+        summaryRunning = false;
+    }
+}
+
+async function maybeAutoSummarize() {
+    try { await generateMemorySummary({ force: false }); } catch (error) { console.error('[墨藍藝廊] 自動摘要失敗', error); }
+}
+
+async function exportChatTxt({ type, entityId, chatId }) {
+    const context = getContext();
+    if (!context || !chatId) return;
+    const character = type === 'character' ? context.characters[Number(entityId)] : null;
+    const filename = safeFilename(chatId, 'chat') + '.txt';
+    const response = await fetch('/api/chats/export', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify({
+            is_group: type === 'group',
+            avatar_url: character?.avatar,
+            file: chatId + '.jsonl',
+            exportfilename: filename,
+            format: 'txt',
+        }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.error) throw new Error(data.message || response.statusText || 'Export failed');
+    downloadBlob(new Blob([String(data.result || '')], { type: 'text/plain;charset=utf-8' }), filename);
+    notify('對話已匯出為 TXT。');
+}
+
+async function deleteChatEntry({ type, entityId, chatId }) {
+    const context = getContext();
+    manualGenerationPermitUntil = 0;
+    disableGroupAutoMode();
+    const isCurrent = String(context.chatId || '') === String(chatId)
+        && ((type === 'group' && String(context.groupId) === String(entityId)) || (type === 'character' && String(context.characterId) === String(entityId)));
+    if (type === 'group') {
+        const api = await getGroupApi();
+        if (isCurrent) await api.deleteGroupChat(entityId, chatId, { jumpToNewChat: true });
+        else await api.deleteGroupChatByName(entityId, chatId);
+    } else if (isCurrent) {
+        const api = await getScriptApi();
+        await api.doNewChat({ deleteCurrentChat: true });
+    } else {
+        const api = await getScriptApi();
+        await api.deleteCharacterChatByName(Number(entityId), chatId);
+    }
+    disableGroupAutoMode();
+    await loadChatEntries();
+    refreshAll();
+    notify('聊天室已刪除，並已從對話列表移除。');
 }
 
 function openUsagePanel() {
@@ -1021,6 +1446,8 @@ async function executeNewChat() {
         notify('請先選擇角色或群組。', 'warning');
         return;
     }
+    manualGenerationPermitUntil = 0;
+    disableGroupAutoMode();
     await context.executeSlashCommandsWithOptions('/newchat');
     notify('已建立新對話。');
     refreshAll();
@@ -1029,6 +1456,7 @@ async function executeNewChat() {
 async function regenerate() {
     if (isBusy) return;
     try {
+        permitManualGeneration();
         isBusy = true;
         renderComposer();
         await getContext().generate('regenerate');
@@ -1046,6 +1474,7 @@ async function continueGeneration() {
     }
     if (isBusy) return;
     try {
+        permitManualGeneration();
         isBusy = true;
         renderComposer();
         await context.generate('continue');
@@ -1077,6 +1506,7 @@ async function handleComposerSubmit(event) {
     }
     nativeTextarea.value = text;
     nativeTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+    permitManualGeneration();
     draft.value = '';
     attachmentName = '';
     renderComposer();
@@ -1091,9 +1521,9 @@ async function handleRootClick(event) {
         renderEntityList();
         return;
     }
-    const entity = event.target.closest('[data-entity-type]');
-    if (entity) {
-        await selectEntity(entity.dataset.entityType, entity.dataset.entityId);
+    const chat = event.target.closest('[data-chat-type][data-chat-id].mol-chat-open');
+    if (chat) {
+        await selectChatEntry(chat.dataset.chatType, chat.dataset.entityId, chat.dataset.chatId);
         return;
     }
     const actionElement = event.target.closest('[data-action]');
@@ -1109,13 +1539,37 @@ async function handleRootClick(event) {
         case 'world-info': openInternalPanel('world-info'); break;
         case 'refresh-world-info': openInternalPanel('world-info'); break;
         case 'character-overview': openCharacterOverview(); break;
+        case 'refresh-character-overview': await context.getCharacters(); openCharacterOverview(); break;
+        case 'new-character-card': await openCharacterEditor(); break;
+        case 'import-character-card': document.getElementById('mol-character-import')?.click(); break;
         case 'view-character-card': openCharacterCard(actionElement.dataset.characterId); break;
+        case 'edit-character-card': await openCharacterEditor(Number(actionElement.dataset.characterId)); break;
+        case 'export-character-card':
+            try { await exportCharacterCard(Number(actionElement.dataset.characterId), actionElement.dataset.format || 'png'); }
+            catch (error) { console.error(error); notify('角色卡匯出失敗。', 'error'); }
+            break;
+        case 'delete-character-card': {
+            const id = Number(actionElement.dataset.characterId);
+            const character = context.characters[id];
+            if (!character) break;
+            openConfirmDialog('刪除角色卡', '將刪除「' + (character.name || '未命名角色') + '」及其全部聊天室。此操作無法復原。', async () => {
+                const api = await getScriptApi();
+                await api.deleteCharacter(character.avatar, { deleteChats: true });
+                await context.getCharacters();
+                await loadChatEntries();
+                notify('角色卡已刪除。');
+                openCharacterOverview();
+                return false;
+            });
+            break;
+        }
         case 'select-overview-character':
             closeDialog();
             await selectEntity('character', actionElement.dataset.characterId);
             break;
         case 'generation-settings': openInternalPanel('generation-settings'); break;
         case 'usage-stats': openUsagePanel(); break;
+        case 'memory-summary': openMemorySummaryPanel(); break;
         case 'user-settings': openInternalPanel('user-settings'); break;
         case 'stop-generation': context.stopGeneration(); closeDialog(); break;
         case 'new-chat': await executeNewChat(); break;
@@ -1176,15 +1630,8 @@ async function handleRootClick(event) {
             break;
         }
         case 'relationship': openRelationshipDialog(); break;
-        case 'memory':
-            openTextDialog({
-                title: '重要記憶',
-                label: '此內容只屬於目前聊天室',
-                value: getChatMeta().memory,
-                multiline: true,
-                onSubmit: async (value) => saveChatMeta({ memory: value.trim() }),
-            });
-            break;
+        case 'generate-memory-summary': break;
+        case 'clear-memory-summary': break;
         case 'rename-chat':
             openTextDialog({
                 title: '重新命名對話',
@@ -1196,6 +1643,7 @@ async function handleRootClick(event) {
                     await context.renameChat(context.chatId, next);
                     notify('對話名稱已更新。');
                     refreshAll();
+                    await loadChatEntries();
                 },
             });
             break;
@@ -1210,17 +1658,33 @@ async function handleRootClick(event) {
             });
             break;
         case 'delete-chat':
-            if (!context.chatId) {
+            if (!context.chatId || !currentEntity(context)) {
                 notify('目前沒有可刪除的聊天室。', 'warning');
                 break;
             }
-            openConfirmDialog('刪除目前聊天室', '將永久刪除目前聊天紀錄，並建立一個新的空白對話。', async () => {
-                const { doNewChat } = await import('/script.js');
-                await doNewChat({ deleteCurrentChat: true });
-                notify('聊天室已刪除，已建立新的空白對話。');
-                refreshAll();
+            openConfirmDialog('刪除目前聊天室', '將永久刪除目前聊天紀錄，並從墨藍藝廊的對話列表移除。', async () => {
+                const entity = currentEntity(context);
+                await deleteChatEntry({ type: entity.type, entityId: entity.id, chatId: context.chatId });
             });
             break;
+        case 'export-current-chat': {
+            const entity = currentEntity(context);
+            if (!entity || !context.chatId) { notify('目前沒有可匯出的聊天室。', 'warning'); break; }
+            try { await exportChatTxt({ type: entity.type, entityId: entity.id, chatId: context.chatId }); }
+            catch (error) { console.error(error); notify('對話匯出失敗。', 'error'); }
+            break;
+        }
+        case 'export-chat-entry':
+            try { await exportChatTxt({ type: actionElement.dataset.chatType, entityId: actionElement.dataset.entityId, chatId: actionElement.dataset.chatId }); }
+            catch (error) { console.error(error); notify('對話匯出失敗。', 'error'); }
+            break;
+        case 'delete-chat-entry': {
+            const target = { type: actionElement.dataset.chatType, entityId: actionElement.dataset.entityId, chatId: actionElement.dataset.chatId };
+            openConfirmDialog('刪除聊天室', '將永久刪除「' + target.chatId + '」，並從對話列表移除。', async () => {
+                await deleteChatEntry(target);
+            });
+            break;
+        }
         case 'edit-message': {
             const id = Number(actionElement.dataset.messageId);
             const message = context.chat[id];
@@ -1282,34 +1746,48 @@ function subscribeToSillyTavern() {
     const context = getContext();
     const events = getEventTypes(context);
     const refresh = () => { if (isOpen) refreshAll(); };
+    const refreshWithList = () => {
+        applyMemoryInjection();
+        if (isOpen) {
+            refreshAll();
+            loadChatEntries();
+        }
+    };
     const refreshMessages = () => { if (isOpen) { renderMessages(); refreshDetail(); } };
-    subscribe(events.CHAT_CHANGED, refresh);
-    subscribe(events.CHAT_CREATED, refresh);
-    subscribe(events.CHAT_DELETED, refresh);
-    subscribe(events.CHARACTER_EDITED, refresh);
-    subscribe(events.CHARACTER_DELETED, refresh);
+    subscribe(events.CHAT_CHANGED, refreshWithList);
+    subscribe(events.CHAT_CREATED, refreshWithList);
+    subscribe(events.CHAT_DELETED, refreshWithList);
+    subscribe(events.GROUP_CHAT_DELETED, refreshWithList);
+    subscribe(events.CHARACTER_EDITED, refreshWithList);
+    subscribe(events.CHARACTER_DELETED, refreshWithList);
     subscribe(events.PERSONA_CHANGED, refresh);
     subscribe(events.MESSAGE_SENT, async () => {
         try { await recordUserMessage(); } catch (error) { console.error('[墨藍藝廊] 記錄訊息次數失敗', error); }
         refreshMessages();
+        setTimeout(() => { if (isOpen) loadChatEntries(); }, 500);
     });
-    subscribe(events.MESSAGE_RECEIVED, refreshMessages);
+    subscribe(events.MESSAGE_RECEIVED, () => { refreshMessages(); setTimeout(maybeAutoSummarize, 250); });
     subscribe(events.MESSAGE_EDITED, refreshMessages);
     subscribe(events.MESSAGE_DELETED, refreshMessages);
     subscribe(events.MESSAGE_SWIPED, refreshMessages);
     subscribe(events.STREAM_TOKEN_RECEIVED, () => { if (isOpen) scheduleMessageRefresh(); });
     subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
-        currentGeneration = { type: String(type || 'normal'), chatId: String(context.chatId || ''), startedAt: Date.now() };
-        if (!dryRun && Date.now() < inspectionSwitchUntil && options?.automatic_trigger === true) {
+        const liveContext = getContext();
+        currentGeneration = { type: String(type || 'normal'), chatId: String(liveContext?.chatId || ''), startedAt: Date.now() };
+        const hasExplicitUserAction = Date.now() < manualGenerationPermitUntil;
+        if (!dryRun && isOpen && !hasExplicitUserAction) {
             context.stopGeneration();
-            notify('已阻止自動生成；目前只開啟聊天室供檢視。');
+            isBusy = false;
+            disableGroupAutoMode();
+            notify(options?.automatic_trigger ? '已關閉群組自動回覆；目前只開啟聊天室供檢視。' : '已阻止未經使用者操作的自動回覆。');
             return;
         }
+        manualGenerationPermitUntil = 0;
         isBusy = true;
         if (isOpen) renderComposer();
     });
-    subscribe(events.GENERATION_ENDED, () => { isBusy = false; if (isOpen) refreshAll(); });
-    subscribe(events.GENERATION_STOPPED, () => { isBusy = false; if (isOpen) refreshAll(); });
+    subscribe(events.GENERATION_ENDED, () => { manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); });
+    subscribe(events.GENERATION_STOPPED, () => { manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) refreshAll(); });
     subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
     subscribe(events.MAIN_API_CHANGED, refresh);
     subscribe(events.WORLDINFO_UPDATED, refresh);
@@ -1359,6 +1837,8 @@ export function onActivate() {
 
 export function onDisable() {
     const context = getContext();
+    manualGenerationPermitUntil = 0;
+    context?.setExtensionPrompt?.('molan_gallery_memory_summary', '', 0, 0, false, 0);
     window.clearTimeout(streamTimer);
     for (const { type, handler } of subscribedEvents.splice(0)) {
         if (type) context?.eventSource?.off?.(type, handler);

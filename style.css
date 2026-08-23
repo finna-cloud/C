@@ -214,16 +214,55 @@ body.mol-gallery-open {
 
 .mol-chat-card {
     position: relative;
-    display: grid;
+    display: block;
     width: 100%;
-    grid-template-columns: 44px 1fr;
-    gap: 11px;
-    padding: 14px 12px;
+    padding: 0;
     border: 0;
     border-bottom: 1px solid var(--mol-line);
     text-align: left;
     background: transparent;
     transition: .2s ease;
+}
+
+.mol-chat-open {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 11px;
+    padding: 14px 12px 8px;
+    border: 0;
+    color: inherit;
+    text-align: left;
+    background: transparent;
+}
+
+.mol-chat-card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    padding: 0 10px 8px 66px;
+}
+
+.mol-chat-card-actions > span {
+    margin-right: auto;
+    color: var(--mol-muted);
+    font-size: 8px;
+}
+
+.mol-chat-card-actions button {
+    display: grid;
+    width: 26px;
+    height: 24px;
+    padding: 0;
+    place-items: center;
+    border: 0;
+    color: var(--mol-muted);
+    background: transparent;
+}
+
+.mol-chat-card-actions button:hover {
+    color: var(--mol-blue);
 }
 
 .mol-chat-card:hover {
@@ -1065,7 +1104,8 @@ body.mol-gallery-open {
 
 .mol-dialog button.danger,
 .mol-world-books button.danger,
-.mol-world-entries button.danger {
+.mol-world-entries button.danger,
+.mol-character-card button.danger {
     color: var(--mol-danger);
 }
 
@@ -1152,7 +1192,7 @@ body.mol-gallery-open {
 
 .mol-character-card {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 10px;
     padding: 14px;
@@ -1161,7 +1201,7 @@ body.mol-gallery-open {
 }
 
 .mol-character-card .mol-avatar {
-    grid-row: span 2;
+    grid-row: 1 / span 3;
 }
 
 .mol-character-card button.primary {
