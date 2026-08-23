@@ -61,7 +61,6 @@ let activeFilter = 'all';
 let searchQuery = '';
 let focusMode = false;
 let sidebarOpen = false;
-let detailOpen = false;
 let streamTimer = 0;
 let attachmentName = '';
 let activeDialogCleanup = null;
@@ -817,7 +816,6 @@ function createRoot() {
         '    <div class="mol-title"><button class="mol-mobile-menu" data-action="mobile-menu" title="顯示對話列表"><i class="fa-solid fa-bars"></i></button><div id="mol-header-avatar" class="mol-avatar small"></div><div><strong id="mol-current-name">尚未選擇角色</strong><span id="mol-current-role">請從左側選擇</span></div></div>',
         '    <div class="mol-header-actions">',
         '      <button class="mol-text-button" data-action="focus"><i class="fa-regular fa-eye"></i><span>專注</span></button>',
-        '      <button class="mol-icon-button" data-action="toggle-detail" title="角色資訊"><i class="fa-solid fa-sliders"></i></button>',
         '      <button class="mol-icon-button" data-action="more" title="對話選項"><i class="fa-solid fa-ellipsis"></i></button>',
         '    </div>',
         '  </header>',
@@ -1010,7 +1008,6 @@ function renderHeader() {
     }
     document.getElementById(ROOT_ID)?.classList.toggle('focus-mode', focusMode);
     document.getElementById(ROOT_ID)?.classList.toggle('mobile-sidebar-open', sidebarOpen);
-    document.getElementById(ROOT_ID)?.classList.toggle('detail-open', detailOpen);
     const focusButton = document.querySelector('#' + ROOT_ID + ' [data-action="focus"]');
     focusButton?.classList.toggle('active', focusMode);
     renderPlayerProfileShortcut();
@@ -2577,7 +2574,6 @@ async function handleRootClick(event) {
         case 'close': setOpen(false); break;
         case 'show-chats': sidebarOpen = !sidebarOpen; renderHeader(); break;
         case 'mobile-menu': sidebarOpen = !sidebarOpen; renderHeader(); break;
-        case 'toggle-detail': detailOpen = !detailOpen; renderHeader(); break;
         case 'focus': focusMode = !focusMode; renderHeader(); break;
         case 'world-info': openInternalPanel('world-info'); break;
         case 'refresh-world-info': openInternalPanel('world-info'); break;
