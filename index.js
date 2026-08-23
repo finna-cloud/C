@@ -49,6 +49,8 @@ const WIDGET_PRESETS = Object.freeze({
 const DEFAULT_SETTINGS = Object.freeze({
     autoOpen: false,
     compactMessages: false,
+    interfaceFontSize: 14,
+    messageFontSize: 14,
     usageTotals: structuredClone(EMPTY_USAGE),
 });
 
@@ -94,7 +96,22 @@ function getSettings() {
         }
     }
     context.extensionSettings[MODULE_NAME].usageTotals = normalizeUsage(context.extensionSettings[MODULE_NAME].usageTotals);
+    context.extensionSettings[MODULE_NAME].interfaceFontSize = clampFontSize(context.extensionSettings[MODULE_NAME].interfaceFontSize, 11, 22, DEFAULT_SETTINGS.interfaceFontSize);
+    context.extensionSettings[MODULE_NAME].messageFontSize = clampFontSize(context.extensionSettings[MODULE_NAME].messageFontSize, 12, 32, DEFAULT_SETTINGS.messageFontSize);
     return context.extensionSettings[MODULE_NAME];
+}
+
+function clampFontSize(value, min, max, fallback) {
+    const size = Number(value);
+    return Math.max(min, Math.min(max, Number.isFinite(size) ? Math.round(size) : fallback));
+}
+
+function applyTypographySettings() {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+    const settings = getSettings();
+    root.style.setProperty('--mol-ui-scale', String(settings.interfaceFontSize / DEFAULT_SETTINGS.interfaceFontSize));
+    root.style.setProperty('--mol-chat-font-size', settings.messageFontSize + 'px');
 }
 
 function normalizeUsage(value) {
@@ -635,6 +652,8 @@ function installSettings() {
         '<div class="inline-drawer-content">',
         '<label class="checkbox_label"><input id="mol-auto-open" type="checkbox"><span>啟動 SillyTavern 時自動開啟</span></label>',
         '<label class="checkbox_label"><input id="mol-compact-messages" type="checkbox"><span>緊湊訊息間距</span></label>',
+        '<label>介面字體 <output id="mol-interface-font-output"></output><input id="mol-interface-font" type="range" min="11" max="22" step="1"></label>',
+        '<label>聊天室訊息字體 <output id="mol-message-font-output"></output><input id="mol-message-font" type="range" min="12" max="32" step="1"></label>',
         '<button id="mol-open-settings" class="menu_button">開啟墨藍藝廊</button>',
         '<small>快捷鍵：Ctrl/Cmd + Shift + M</small>',
         '</div></div>',
@@ -643,6 +662,14 @@ function installSettings() {
     const settings = getSettings();
     block.querySelector('#mol-auto-open').checked = Boolean(settings.autoOpen);
     block.querySelector('#mol-compact-messages').checked = Boolean(settings.compactMessages);
+    const interfaceFont = block.querySelector('#mol-interface-font');
+    const messageFont = block.querySelector('#mol-message-font');
+    const interfaceOutput = block.querySelector('#mol-interface-font-output');
+    const messageOutput = block.querySelector('#mol-message-font-output');
+    interfaceFont.value = String(settings.interfaceFontSize);
+    messageFont.value = String(settings.messageFontSize);
+    interfaceOutput.value = settings.interfaceFontSize + ' px';
+    messageOutput.value = settings.messageFontSize + ' px';
     block.querySelector('#mol-auto-open').addEventListener('change', (event) => {
         settings.autoOpen = event.currentTarget.checked;
         getContext().saveSettingsDebounced();
@@ -650,6 +677,18 @@ function installSettings() {
     block.querySelector('#mol-compact-messages').addEventListener('change', (event) => {
         settings.compactMessages = event.currentTarget.checked;
         document.getElementById(ROOT_ID)?.classList.toggle('compact-messages', settings.compactMessages);
+        getContext().saveSettingsDebounced();
+    });
+    interfaceFont.addEventListener('input', (event) => {
+        settings.interfaceFontSize = clampFontSize(event.currentTarget.value, 11, 22, DEFAULT_SETTINGS.interfaceFontSize);
+        interfaceOutput.value = settings.interfaceFontSize + ' px';
+        applyTypographySettings();
+        getContext().saveSettingsDebounced();
+    });
+    messageFont.addEventListener('input', (event) => {
+        settings.messageFontSize = clampFontSize(event.currentTarget.value, 12, 32, DEFAULT_SETTINGS.messageFontSize);
+        messageOutput.value = settings.messageFontSize + ' px';
+        applyTypographySettings();
         getContext().saveSettingsDebounced();
     });
     block.querySelector('#mol-open-settings').addEventListener('click', () => setOpen(true));
@@ -665,6 +704,7 @@ function setOpen(value) {
         enterInspectionMode({ stopActive: true });
         applyMemoryInjection();
         root.classList.toggle('compact-messages', Boolean(getSettings().compactMessages));
+        applyTypographySettings();
         refreshAll();
         loadChatEntries();
         setTimeout(() => root.querySelector('#mol-draft')?.focus(), 0);
@@ -1074,6 +1114,7 @@ async function openWorldInfoPanel() {
         names.length ? '<div class="mol-world-books">' + names.map((name, index) => [
             '<article><span class="mol-book-number">' + String(index + 1).padStart(2, '0') + '</span><div><strong>' + escapeHtml(name) + '</strong><small>世界書資料</small></div>',
             '<button data-action="edit-world-book" data-book="' + escapeHtml(name) + '">開啟／修改</button>',
+            '<button data-action="rename-world-book" data-book="' + escapeHtml(name) + '">重新命名</button>',
             '<button data-action="delete-world-book" data-book="' + escapeHtml(name) + '" class="danger">刪除</button></article>',
         ].join('')).join('') + '</div>' : '<p class="mol-dialog-copy">目前沒有世界書。可新增空白世界書，或匯入 JSON／PNG。</p>',
         '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div></div>',
@@ -1118,7 +1159,7 @@ async function openWorldBookPanel(name) {
         layer.innerHTML = [
             '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button>',
             '<p class="mol-eyebrow">WORLD BOOK</p><h3>' + escapeHtml(name) + '</h3>',
-            '<div class="mol-panel-toolbar"><button data-action="world-info"><i class="fa-solid fa-arrow-left"></i> 返回</button><button class="primary" data-action="new-world-entry" data-book="' + escapeHtml(name) + '"><i class="fa-solid fa-plus"></i> 新增條目</button></div>',
+            '<div class="mol-panel-toolbar"><button data-action="world-info"><i class="fa-solid fa-arrow-left"></i> 返回</button><button data-action="rename-world-book" data-book="' + escapeHtml(name) + '"><i class="fa-solid fa-pen"></i> 修改名稱</button><button class="primary" data-action="new-world-entry" data-book="' + escapeHtml(name) + '"><i class="fa-solid fa-plus"></i> 新增條目</button></div>',
             entries.length ? '<div class="mol-world-entries">' + entries.map(([uid, entry]) => [
                 '<article><div><strong>' + escapeHtml(worldEntryTitle(entry, uid)) + '</strong><small>' + escapeHtml(truncate(entry.content || '尚無內容', 88)) + '</small></div>',
                 '<span class="mol-entry-state">' + (entry.disable ? '停用' : '啟用') + '</span>',
@@ -1133,6 +1174,68 @@ async function openWorldBookPanel(name) {
         notify('無法讀取世界書。', 'error');
         await openWorldInfoPanel();
     }
+}
+
+async function renameWorldBook(oldName, newName) {
+    const context = getContext();
+    const api = await getWorldInfoApi();
+    const nextName = String(newName || '').trim();
+    if (!context || !oldName) throw new Error('World info context is unavailable');
+    if (!nextName) {
+        notify('世界書名稱不可空白。', 'warning');
+        return null;
+    }
+    if (nextName === oldName) return oldName;
+    if (nextName.toLocaleLowerCase() === String(oldName).toLocaleLowerCase()) {
+        notify('新名稱不可只變更英文字母大小寫。', 'warning');
+        return null;
+    }
+    const names = context.getWorldInfoNames?.() || [];
+    if (names.some((name) => name !== oldName && String(name).toLocaleLowerCase() === nextName.toLocaleLowerCase())) {
+        notify('已有同名世界書，請使用其他名稱。', 'warning');
+        return null;
+    }
+
+    const data = await api.loadWorldInfo(oldName);
+    if (!data) throw new Error('World info not found');
+    await api.saveWorldInfo(nextName, data, true);
+
+    const selectedIndex = api.selected_world_info?.findIndex((name) => name === oldName) ?? -1;
+    if (selectedIndex >= 0) api.selected_world_info.splice(selectedIndex, 1, nextName);
+    if (api.world_info && typeof api.world_info === 'object') {
+        api.world_info.globalSelect = [...(api.selected_world_info || [])];
+    }
+    for (const link of api.world_info?.charLore || []) {
+        if (!Array.isArray(link.extraBooks)) continue;
+        link.extraBooks = link.extraBooks.map((name) => name === oldName ? nextName : name);
+    }
+    if (context.powerUserSettings?.persona_description_lorebook === oldName) {
+        context.powerUserSettings.persona_description_lorebook = nextName;
+    }
+    for (const descriptor of Object.values(context.powerUserSettings?.persona_descriptions || {})) {
+        if (descriptor?.lorebook === oldName) descriptor.lorebook = nextName;
+    }
+
+    for (const character of context.characters || []) {
+        if (character?.data?.extensions?.world !== oldName) continue;
+        const response = await fetch('/api/characters/merge-attributes', {
+            method: 'POST',
+            headers: context.getRequestHeaders(),
+            body: JSON.stringify({ avatar: character.avatar, data: { extensions: { world: nextName } } }),
+        });
+        if (!response.ok) throw new Error('Could not update character lorebook link');
+        character.data.extensions.world = nextName;
+    }
+
+    const deletion = await fetch('/api/worldinfo/delete', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify({ name: oldName }),
+    });
+    if (!deletion.ok) throw new Error('Could not remove the previous world info file');
+    await api.updateWorldInfoList?.();
+    context.saveSettingsDebounced();
+    return nextName;
 }
 
 async function openWorldEntryEditor(name, uid = null) {
@@ -1816,6 +1919,8 @@ function openInternalPanel(kind) {
             '<div class="mol-settings-list">',
             '<label><span><strong>啟動時自動開啟</strong><small>進入 SillyTavern 後顯示墨藍藝廊</small></span><input name="autoOpen" type="checkbox"' + (settings.autoOpen ? ' checked' : '') + '></label>',
             '<label><span><strong>緊湊訊息間距</strong><small>在同一畫面顯示更多訊息</small></span><input name="compactMessages" type="checkbox"' + (settings.compactMessages ? ' checked' : '') + '></label>',
+            '<label class="mol-range-setting"><span><strong>介面字體大小</strong><small>調整按鈕、選單與標題文字</small></span><span><input name="interfaceFontSize" type="range" min="11" max="22" step="1" value="' + settings.interfaceFontSize + '"><output>' + settings.interfaceFontSize + ' px</output></span></label>',
+            '<label class="mol-range-setting"><span><strong>聊天室訊息字體</strong><small>只調整對話正文，不影響介面</small></span><span><input name="messageFontSize" type="range" min="12" max="32" step="1" value="' + settings.messageFontSize + '"><output>' + settings.messageFontSize + ' px</output></span></label>',
             '</div>',
             '<p class="mol-dialog-hint">快捷鍵：Ctrl/Cmd + Shift + M</p>',
             '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div>',
@@ -1832,6 +1937,8 @@ function openInternalPanel(kind) {
         const settings = getSettings();
         const autoOpen = layer.querySelector('input[name="autoOpen"]');
         const compact = layer.querySelector('input[name="compactMessages"]');
+        const interfaceFont = layer.querySelector('input[name="interfaceFontSize"]');
+        const messageFont = layer.querySelector('input[name="messageFontSize"]');
         const save = () => context.saveSettingsDebounced();
         const onAutoOpen = () => { settings.autoOpen = autoOpen.checked; save(); };
         const onCompact = () => {
@@ -1839,11 +1946,27 @@ function openInternalPanel(kind) {
             document.getElementById(ROOT_ID)?.classList.toggle('compact-messages', settings.compactMessages);
             save();
         };
+        const onInterfaceFont = () => {
+            settings.interfaceFontSize = clampFontSize(interfaceFont.value, 11, 22, DEFAULT_SETTINGS.interfaceFontSize);
+            interfaceFont.nextElementSibling.value = settings.interfaceFontSize + ' px';
+            applyTypographySettings();
+            save();
+        };
+        const onMessageFont = () => {
+            settings.messageFontSize = clampFontSize(messageFont.value, 12, 32, DEFAULT_SETTINGS.messageFontSize);
+            messageFont.nextElementSibling.value = settings.messageFontSize + ' px';
+            applyTypographySettings();
+            save();
+        };
         autoOpen.addEventListener('change', onAutoOpen);
         compact.addEventListener('change', onCompact);
+        interfaceFont.addEventListener('input', onInterfaceFont);
+        messageFont.addEventListener('input', onMessageFont);
         activeDialogCleanup = () => {
             autoOpen.removeEventListener('change', onAutoOpen);
             compact.removeEventListener('change', onCompact);
+            interfaceFont.removeEventListener('input', onInterfaceFont);
+            messageFont.removeEventListener('input', onMessageFont);
         };
     }
 }
@@ -2045,6 +2168,28 @@ async function handleRootClick(event) {
             });
             break;
         case 'edit-world-book': await openWorldBookPanel(actionElement.dataset.book); break;
+        case 'rename-world-book': {
+            const oldName = actionElement.dataset.book;
+            openTextDialog({
+                title: '修改世界書名稱',
+                label: '世界書新名稱',
+                value: oldName,
+                submitText: '儲存名稱',
+                onSubmit: async (value) => {
+                    try {
+                        const renamed = await renameWorldBook(oldName, value);
+                        if (!renamed) return false;
+                        if (renamed !== oldName) notify('世界書已重新命名為「' + renamed + '」。');
+                        await openWorldBookPanel(renamed);
+                    } catch (error) {
+                        console.error('[墨藍藝廊] 世界書重新命名失敗', error);
+                        notify('世界書重新命名失敗，原資料仍會保留。', 'error');
+                    }
+                    return false;
+                },
+            });
+            break;
+        }
         case 'delete-world-book': {
             const name = actionElement.dataset.book;
             openConfirmDialog('刪除世界書', '確定刪除「' + name + '」？此操作無法復原。', async () => {
