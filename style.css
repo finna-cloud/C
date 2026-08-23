@@ -1187,6 +1187,64 @@ body.mol-gallery-open {
     color: var(--mol-blue);
 }
 
+.mol-greeting-list {
+    display: grid;
+    gap: 9px;
+    margin: 16px 0 20px;
+}
+
+.mol-greeting-option {
+    display: grid;
+    width: 100%;
+    gap: 9px;
+    padding: 14px 16px;
+    border: 1px solid var(--mol-line);
+    color: var(--mol-ink);
+    text-align: left;
+    background: var(--mol-paper);
+    transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.mol-greeting-option:hover {
+    border-color: rgba(32, 75, 217, .55);
+    transform: translateY(-1px);
+}
+
+.mol-greeting-option.is-current {
+    border-color: var(--mol-blue);
+    background: var(--mol-blue-soft);
+    box-shadow: inset 3px 0 0 var(--mol-blue);
+}
+
+.mol-greeting-option > span {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.mol-greeting-option strong {
+    font: 500 calc(13px * var(--mol-ui-scale))/1.3 "Noto Serif TC", serif;
+}
+
+.mol-greeting-option em {
+    color: var(--mol-blue);
+    font-size: calc(9px * var(--mol-ui-scale));
+    font-style: normal;
+    letter-spacing: .08em;
+}
+
+.mol-greeting-option p {
+    display: -webkit-box;
+    overflow: hidden;
+    margin: 0;
+    color: #55534d;
+    font: calc(11px * var(--mol-ui-scale))/1.7 Georgia, "Noto Serif TC", serif;
+    white-space: pre-line;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 5;
+}
+
 .mol-panel-dialog {
     max-height: min(680px, calc(var(--mol-viewport-height) - var(--mol-dialog-layer-padding) - var(--mol-dialog-layer-padding)));
     overflow-y: auto;

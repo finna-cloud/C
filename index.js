@@ -276,6 +276,63 @@ function currentEntity(context = getContext()) {
     return character ? { type: 'character', item: character, id } : null;
 }
 
+function getCharacterGreetings(entity = currentEntity()) {
+    if (!entity || entity.type !== 'character') return [];
+    const data = entity.item?.data || {};
+    const first = String(data.first_mes ?? entity.item?.first_mes ?? '').trim();
+    const alternates = Array.isArray(data.alternate_greetings)
+        ? data.alternate_greetings
+        : (Array.isArray(entity.item?.alternate_greetings) ? entity.item.alternate_greetings : []);
+    return [first, ...alternates.map((item) => String(item ?? '').trim())].filter(Boolean);
+}
+
+function currentGreetingIndex(context, greetings) {
+    const opening = context?.chat?.[0];
+    if (!opening || opening.is_user) return -1;
+    const exact = greetings.findIndex((item) => item === String(opening.mes || '').trim());
+    if (exact >= 0) return exact;
+    const swipeId = Number(opening.swipe_id);
+    const swipes = Array.isArray(opening.swipes) ? opening.swipes.map((item) => String(item || '').trim()) : [];
+    if (Number.isInteger(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
+        const matchedSwipe = greetings.findIndex((item) => item === swipes[swipeId]);
+        if (matchedSwipe >= 0) return matchedSwipe;
+    }
+    return 0;
+}
+
+async function switchGreeting(index) {
+    const context = getContext();
+    const entity = currentEntity(context);
+    if (!entity || entity.type !== 'character') {
+        notify('開場白切換僅支援單人角色聊天室。', 'warning');
+        return false;
+    }
+    const greetings = getCharacterGreetings(entity);
+    const selected = greetings[index];
+    if (!selected) {
+        notify('找不到指定的開場白。', 'warning');
+        return false;
+    }
+    const opening = context.chat?.[0];
+    if (!opening || opening.is_user) {
+        notify('目前聊天室沒有可替換的第一則角色訊息。', 'warning');
+        return false;
+    }
+    opening.swipes = [...greetings];
+    opening.swipe_id = index;
+    opening.mes = selected;
+    opening.name = entity.item?.name || entity.item?.data?.name || opening.name;
+    if (opening.extra) delete opening.extra.display_text;
+    if (typeof context.saveChatConditional === 'function') await context.saveChatConditional();
+    else await context.saveChat?.();
+    context.updateMessageBlock?.(0, opening);
+    const editedEvent = getEventTypes(context).MESSAGE_EDITED;
+    if (editedEvent) await context.eventSource?.emit?.(editedEvent, 0);
+    refreshAll();
+    notify((index === 0 ? '預設開場白' : '開場白 ' + (index + 1)) + '已套用至目前聊天室。');
+    return true;
+}
+
 function avatarUrl(entity, context = getContext()) {
     if (!entity || !context) return '';
     try {
@@ -1309,6 +1366,7 @@ function openMoreDialog() {
     layer.innerHTML = [
         '<div class="mol-dialog mol-action-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHAT ACTIONS</p><h3>對話選項</h3>',
         '<button data-action="rename-chat"><i class="fa-solid fa-pen"></i><span>重新命名對話</span></button>',
+        '<button data-action="greeting-selector"><i class="fa-solid fa-book-open"></i><span>切換開場白</span></button>',
         '<button data-action="export-current-chat"><i class="fa-solid fa-file-arrow-down"></i><span>匯出對話 TXT</span></button>',
         '<button data-action="memory-summary"><i class="fa-solid fa-brain"></i><span>記憶自動摘要</span></button>',
         '<button data-action="creator-widgets"><i class="fa-solid fa-screwdriver-wrench"></i><span>創作者小工具</span></button>',
@@ -1317,6 +1375,42 @@ function openMoreDialog() {
         '<button data-action="delete-chat" class="danger"><i class="fa-solid fa-trash-can"></i><span>刪除目前聊天室</span></button>',
         '<button data-action="user-settings"><i class="fa-solid fa-palette"></i><span>藝廊介面設定</span></button>',
         '</div>',
+    ].join('');
+    layer.hidden = false;
+}
+
+function openGreetingSelector() {
+    closeDialog();
+    const context = getContext();
+    const entity = currentEntity(context);
+    if (!entity || entity.type !== 'character') {
+        notify('開場白切換僅支援單人角色聊天室。', 'warning');
+        return;
+    }
+    const greetings = getCharacterGreetings(entity);
+    if (!greetings.length) {
+        notify('目前角色卡沒有可用的開場白。', 'warning');
+        return;
+    }
+    const opening = context.chat?.[0];
+    if (!opening || opening.is_user) {
+        notify('目前聊天室沒有可替換的第一則角色訊息。', 'warning');
+        return;
+    }
+    const selectedIndex = currentGreetingIndex(context, greetings);
+    const options = greetings.map((greeting, index) => [
+        '<button type="button" class="mol-greeting-option' + (index === selectedIndex ? ' is-current' : '') + '" data-action="select-greeting" data-greeting-index="' + index + '">',
+        '<span><strong>' + (index === 0 ? '預設開場白' : '開場白 ' + (index + 1)) + '</strong>' + (index === selectedIndex ? '<em><i class="fa-solid fa-check"></i> 目前使用</em>' : '') + '</span>',
+        '<p>' + escapeHtml(greeting) + '</p>',
+        '</button>',
+    ].join('')).join('');
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    layer.innerHTML = [
+        '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">OPENING GREETINGS</p><h3>切換開場白</h3>',
+        '<p class="mol-dialog-copy">選擇後只會替換目前聊天室的第一則角色訊息；同角色的其他聊天室不受影響。</p>',
+        '<div class="mol-greeting-list">' + options + '</div>',
+        '<div class="mol-dialog-actions"><button data-action="more">返回對話選項</button></div></div>',
     ].join('');
     layer.hidden = false;
 }
@@ -1904,7 +1998,7 @@ function newCharacterCardData(values) {
             creator_notes: values.creator_notes,
             system_prompt: values.system_prompt,
             post_history_instructions: '',
-            alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
+            alternate_greetings: values.alternate_greetings || [], tags: [], creator: '', character_version: '', extensions: {},
         },
     };
 }
@@ -1917,12 +2011,14 @@ async function openCharacterEditor(id = null) {
     const character = id === null ? null : context.characters[Number(id)];
     const data = character?.data || {};
     const value = (key, fallback = '') => escapeHtml(data[key] ?? character?.[key] ?? fallback);
+    const alternateValue = escapeHtml((Array.isArray(data.alternate_greetings) ? data.alternate_greetings : (character?.alternate_greetings || [])).map(String).join('\n---\n'));
     layer.innerHTML = [
         '<form class="mol-dialog mol-panel-dialog mol-wide-dialog mol-character-form"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CHARACTER EDITOR</p><h3>' + (character ? '修改角色卡' : '新增角色卡') + '</h3>',
         '<div class="mol-form-grid"><label><span>角色名稱</span><input name="name" required value="' + value('name') + '"></label><label><span>角色定位</span><input name="personality" value="' + value('personality') + '"></label>',
         '<label class="wide"><span>角色描述</span><textarea name="description" rows="5">' + value('description') + '</textarea></label>',
         '<label class="wide"><span>場景設定</span><textarea name="scenario" rows="4">' + value('scenario') + '</textarea></label>',
-        '<label class="wide"><span>第一則訊息</span><textarea name="first_mes" rows="5">' + value('first_mes') + '</textarea></label>',
+        '<label class="wide"><span>預設開場白</span><textarea name="first_mes" rows="5">' + value('first_mes') + '</textarea></label>',
+        '<label class="wide"><span>替代開場白（使用單獨一行 --- 分隔）</span><textarea name="alternate_greetings" rows="8">' + alternateValue + '</textarea></label>',
         '<label class="wide"><span>對話範例</span><textarea name="mes_example" rows="4">' + value('mes_example') + '</textarea></label>',
         '<label class="wide"><span>創作者備註</span><textarea name="creator_notes" rows="4">' + value('creator_notes') + '</textarea></label>',
         '<label class="wide"><span>System Prompt</span><textarea name="system_prompt" rows="4">' + value('system_prompt') + '</textarea></label></div>',
@@ -1935,6 +2031,7 @@ async function openCharacterEditor(id = null) {
         try {
             const formData = new FormData(form);
             const values = Object.fromEntries(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt'].map((key) => [key, String(formData.get(key) || '')]));
+            values.alternate_greetings = String(formData.get('alternate_greetings') || '').split(/\n\s*---\s*\n/g).map((item) => item.trim()).filter(Boolean);
             if (!values.name.trim()) return notify('請輸入角色名稱。', 'warning');
             let card = character ? await getCharacterJson(character) : newCharacterCardData(values);
             card.data ||= {};
@@ -2700,6 +2797,10 @@ async function handleRootClick(event) {
         case 'new-chat': await executeNewChat(); break;
         case 'continue': closeDialog(); await continueGeneration(); break;
         case 'more': openMoreDialog(); break;
+        case 'greeting-selector': openGreetingSelector(); break;
+        case 'select-greeting':
+            if (await switchGreeting(Number(actionElement.dataset.greetingIndex))) closeDialog();
+            break;
         case 'close-dialog': closeDialog(); break;
         case 'import-world-info': document.getElementById('mol-world-import')?.click(); break;
         case 'new-world-book':
