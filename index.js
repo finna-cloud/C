@@ -38,6 +38,7 @@ let streamTimer = 0;
 let attachmentName = '';
 let activeDialogCleanup = null;
 let manualGenerationPermitUntil = 0;
+let blockedGenerationUntil = 0;
 let chatEntries = [];
 let chatListLoading = false;
 let chatListRequest = 0;
@@ -320,6 +321,7 @@ function getGroupApi() {
 }
 
 function permitManualGeneration(milliseconds = 60000) {
+    blockedGenerationUntil = 0;
     manualGenerationPermitUntil = Date.now() + milliseconds;
 }
 
@@ -329,6 +331,15 @@ function disableGroupAutoMode() {
         checkbox.checked = false;
         checkbox.dispatchEvent(new Event('input', { bubbles: true }));
     }
+}
+
+function enterInspectionMode({ stopActive = false, guardMilliseconds = 8000 } = {}) {
+    manualGenerationPermitUntil = 0;
+    blockedGenerationUntil = Math.max(blockedGenerationUntil, Date.now() + guardMilliseconds);
+    isBusy = false;
+    disableGroupAutoMode();
+    if (stopActive) getContext()?.stopGeneration?.();
+    if (isOpen) renderComposer();
 }
 
 function applyMemoryInjection() {
@@ -411,8 +422,7 @@ async function loadChatEntries() {
 async function selectChatEntry(type, entityId, chatId) {
     const context = getContext();
     if (!context) return;
-    manualGenerationPermitUntil = 0;
-    disableGroupAutoMode();
+    enterInspectionMode({ stopActive: true });
     try {
         if (type === 'group') {
             const api = await getGroupApi();
@@ -427,7 +437,7 @@ async function selectChatEntry(type, entityId, chatId) {
                 await api.openCharacterChat(chatId);
             }
         }
-        disableGroupAutoMode();
+        enterInspectionMode();
         applyMemoryInjection();
         sidebarOpen = false;
         refreshAll();
@@ -571,7 +581,7 @@ function setOpen(value) {
     root.hidden = !isOpen;
     document.body.classList.toggle('mol-gallery-open', isOpen);
     if (isOpen) {
-        disableGroupAutoMode();
+        enterInspectionMode({ stopActive: true });
         applyMemoryInjection();
         root.classList.toggle('compact-messages', Boolean(getSettings().compactMessages));
         refreshAll();
@@ -769,8 +779,7 @@ async function selectEntity(type, id) {
     const context = getContext();
     if (!context) return;
     try {
-        manualGenerationPermitUntil = 0;
-        disableGroupAutoMode();
+        enterInspectionMode({ stopActive: true });
         if (type === 'group') {
             const group = context.groups.find((item) => String(item.id) === String(id));
             if (!group?.chat_id) {
@@ -781,7 +790,7 @@ async function selectEntity(type, id) {
         } else {
             await context.selectCharacterById(Number(id), { switchMenu: false });
         }
-        disableGroupAutoMode();
+        enterInspectionMode();
         applyMemoryInjection();
         sidebarOpen = false;
         refreshAll();
@@ -1446,8 +1455,7 @@ async function executeNewChat() {
         notify('請先選擇角色或群組。', 'warning');
         return;
     }
-    manualGenerationPermitUntil = 0;
-    disableGroupAutoMode();
+    enterInspectionMode({ stopActive: true });
     await context.executeSlashCommandsWithOptions('/newchat');
     notify('已建立新對話。');
     refreshAll();
@@ -1774,20 +1782,41 @@ function subscribeToSillyTavern() {
     subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
         const liveContext = getContext();
         currentGeneration = { type: String(type || 'normal'), chatId: String(liveContext?.chatId || ''), startedAt: Date.now() };
+        if (dryRun) return;
         const hasExplicitUserAction = Date.now() < manualGenerationPermitUntil;
-        if (!dryRun && isOpen && !hasExplicitUserAction) {
-            context.stopGeneration();
+        if (isOpen && !hasExplicitUserAction) {
+            blockedGenerationUntil = Date.now() + 10000;
+            manualGenerationPermitUntil = 0;
             isBusy = false;
             disableGroupAutoMode();
+            renderComposer();
+            // SillyTavern 在 GENERATION_STARTED 之後才建立 AbortController；延後才能真正中止。
+            setTimeout(() => {
+                if (Date.now() < blockedGenerationUntil) context.stopGeneration();
+                isBusy = false;
+                if (isOpen) renderComposer();
+            }, 0);
             notify(options?.automatic_trigger ? '已關閉群組自動回覆；目前只開啟聊天室供檢視。' : '已阻止未經使用者操作的自動回覆。');
             return;
         }
+        if (!isOpen) {
+            isBusy = false;
+            return;
+        }
         manualGenerationPermitUntil = 0;
+        blockedGenerationUntil = 0;
         isBusy = true;
         if (isOpen) renderComposer();
     });
-    subscribe(events.GENERATION_ENDED, () => { manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); });
-    subscribe(events.GENERATION_STOPPED, () => { manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) refreshAll(); });
+    subscribe(events.GENERATION_AFTER_COMMANDS, (_type, _options, dryRun) => {
+        if (dryRun || !isOpen || Date.now() >= blockedGenerationUntil) return;
+        context.stopGeneration();
+        isBusy = false;
+        disableGroupAutoMode();
+        renderComposer();
+    });
+    subscribe(events.GENERATION_ENDED, () => { manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); });
+    subscribe(events.GENERATION_STOPPED, () => { manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) renderComposer(); });
     subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
     subscribe(events.MAIN_API_CHANGED, refresh);
     subscribe(events.WORLDINFO_UPDATED, refresh);
@@ -1838,6 +1867,7 @@ export function onActivate() {
 export function onDisable() {
     const context = getContext();
     manualGenerationPermitUntil = 0;
+    blockedGenerationUntil = 0;
     context?.setExtensionPrompt?.('molan_gallery_memory_summary', '', 0, 0, false, 0);
     window.clearTimeout(streamTimer);
     for (const { type, handler } of subscribedEvents.splice(0)) {
