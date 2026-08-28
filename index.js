@@ -20,32 +20,7 @@ const DEFAULT_MEMORY = Object.freeze({
     lastSummarizedCount: 0,
     updatedAt: 0,
 });
-const DEFAULT_WIDGET = Object.freeze({
-    id: '',
-    name: '聊天室狀態',
-    enabled: true,
-    autoUpdate: false,
-    theme: 'blue',
-    instruction: '依照最新對話更新所有狀態值。不得虛構未發生的事件；無法判斷時保留原值。',
-    template: '<div class="widget-title">墨藍狀態欄</div><div class="widget-grid">📅 日期：{{日期}}<br>📍 地點：{{地點}}<br>💙 關係：{{關係}}<br>✨ 好感度：{{好感度}}</div><div class="widget-actions">{{action:advance}}</div>',
-    states: [
-        { key: '日期', label: '日期', value: '未設定', type: 'text', instruction: '目前對話中的日期。' },
-        { key: '地點', label: '地點', value: '未設定', type: 'text', instruction: '目前所在位置。' },
-        { key: '關係', label: '關係', value: '初識', type: 'text', instruction: '{{char}} 與 {{user}} 目前的關係。' },
-        { key: '好感度', label: '好感度', value: 50, type: 'progress', min: 0, max: 100, instruction: '{{char}} 對 {{user}} 的好感度，0 到 100。' },
-    ],
-    actions: [
-        { id: 'advance', label: '推進劇情', type: 'send', payload: '繼續推進目前的情節。', key: '' },
-    ],
-    lastUpdatedMessageCount: 0,
-});
-const WIDGET_PRESETS = Object.freeze({
-    blue: DEFAULT_WIDGET.template,
-    pastel: '<div class="widget-title">今日校園</div><div class="widget-grid">星期｜{{星期}}　節次｜{{節次}}<br>天氣｜{{天氣}}　心情｜{{心情}}<br>親密度｜{{親密度}}</div><div class="widget-actions">{{action:talk}} {{action:explore}}</div>',
-    dark: '<div class="widget-title">CASE FILE</div><div class="widget-grid">事件｜{{事件編號}}　線索｜{{線索數量}}<br>位置｜{{地點}}　懷疑｜{{懷疑值}}</div><div class="widget-actions">{{action:investigate}}</div>',
-    rpg: '<div class="widget-title">ADVENTURE LOG</div><div class="widget-grid">📍 {{地點}} · {{時段}}<br>HP｜{{HP}}　MP｜{{MP}}　金額｜{{金額}}<br>夥伴等級｜{{夥伴等級}}</div><div class="widget-actions">{{action:rest}} {{action:move}}</div>',
-    minimal: '<div class="widget-title">CURRENT SCENE</div><div class="widget-grid">{{日期}} · {{天氣}}<br>{{角色狀態}}<br>氛圍｜{{氛圍}}</div>',
-});
+const MAX_STATUSBAR_FILE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_SETTINGS = Object.freeze({
     autoOpen: false,
     compactMessages: false,
@@ -74,7 +49,6 @@ let chatEntries = [];
 let chatListLoading = false;
 let chatListRequest = 0;
 let summaryRunning = false;
-let widgetUpdateRunning = false;
 let currentGeneration = { type: '', chatId: '', startedAt: 0 };
 let characterCarouselIndex = 0;
 let characterCarouselFlipped = false;
@@ -187,49 +161,151 @@ function normalizeMemory(value, legacy = '') {
     };
 }
 
-function normalizeWidget(value) {
-    const source = value && typeof value === 'object' ? value : {};
-    const id = String(source.id || ('widget-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7)));
-    const states = Array.isArray(source.states) ? source.states.slice(0, 30).map((state, index) => {
-        const item = state && typeof state === 'object' ? state : {};
-        const key = String(item.key || item.label || ('狀態' + (index + 1))).trim().slice(0, 40);
-        const type = ['text', 'number', 'progress', 'toggle'].includes(item.type) ? item.type : 'text';
-        return {
-            key,
-            label: String(item.label || key).trim().slice(0, 60),
-            value: ['number', 'progress'].includes(type) ? (Number.isFinite(Number(item.value)) ? Number(item.value) : 0) : (type === 'toggle' ? Boolean(item.value) : String(item.value ?? '')),
-            type,
-            min: Number.isFinite(Number(item.min)) ? Number(item.min) : 0,
-            max: Number.isFinite(Number(item.max)) ? Number(item.max) : 100,
-            instruction: String(item.instruction || '').trim().slice(0, 1000),
-        };
-    }).filter((state) => state.key) : structuredClone(DEFAULT_WIDGET.states);
-    const actions = Array.isArray(source.actions) ? source.actions.slice(0, 20).map((action, index) => {
-        const item = action && typeof action === 'object' ? action : {};
-        return {
-            id: String(item.id || ('action-' + (index + 1))).trim().replace(/[<>"']/g, '-').slice(0, 40),
-            label: String(item.label || ('動作 ' + (index + 1))).trim().slice(0, 60),
-            type: ['send', 'command', 'increment', 'decrement', 'set', 'toggle'].includes(item.type) ? item.type : 'send',
-            payload: String(item.payload ?? '').slice(0, 2000),
-            key: String(item.key || '').trim().slice(0, 40),
-        };
-    }).filter((action) => action.id && action.label) : structuredClone(DEFAULT_WIDGET.actions);
+function statusBarColor(value, fallback) {
+    return /^#[0-9a-f]{3,8}$/i.test(String(value || '')) ? String(value) : fallback;
+}
+
+function findAssignedJsonObject(content) {
+    const text = String(content || '');
+    const assignment = /(?:const|let|var)\s+[A-Za-z_$][\w$]*CONFIG[\w$]*\s*=\s*/g.exec(text)
+        || /(?:const|let|var)\s+DAYAN_CONFIG\s*=\s*/g.exec(text);
+    let start = assignment ? text.indexOf('{', assignment.index + assignment[0].length) : -1;
+    if (start < 0) start = text.search(/\{\s*"meta"\s*:/);
+    if (start < 0) throw new Error('找不到可讀取的狀態欄 CONFIG。');
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+        const character = text[index];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (character === '\\') escaped = true;
+            else if (character === '"') inString = false;
+            continue;
+        }
+        if (character === '"') { inString = true; continue; }
+        if (character === '{') depth += 1;
+        if (character === '}') {
+            depth -= 1;
+            if (depth === 0) return JSON.parse(text.slice(start, index + 1));
+        }
+    }
+    throw new Error('狀態欄 CONFIG 結構不完整。');
+}
+
+function createStatusBarState(config) {
     return {
-        id,
-        name: String(source.name || DEFAULT_WIDGET.name).trim().slice(0, 80),
-        enabled: source.enabled !== false,
-        autoUpdate: Boolean(source.autoUpdate),
-        theme: ['blue', 'pastel', 'dark', 'rpg', 'minimal'].includes(source.theme) ? source.theme : 'blue',
-        instruction: String(source.instruction || DEFAULT_WIDGET.instruction).trim().slice(0, 6000),
-        template: String(source.template || WIDGET_PRESETS.blue).slice(0, 30000),
-        states,
-        actions,
-        lastUpdatedMessageCount: Math.max(0, Number(source.lastUpdatedMessageCount) || 0),
+        fields: Object.fromEntries(config.fields.map((item) => [item.id, structuredClone(item.value)])),
+        affinities: Object.fromEntries(config.affinities.map((item) => [item.id, item.value])),
+        resources: Object.fromEntries(config.resources.map((item) => [item.id, item.initial])),
+        memo: config.dynamicMessages[0]?.value || '目前沒有待辦事項',
+        mode: config.defaultMode,
+        collapsed: false,
+        hidden: false,
+        lastAction: null,
+        textLedger: {},
+        recentTransactions: [],
     };
 }
 
-function normalizeWidgets(value) {
-    return Array.isArray(value) ? value.slice(0, 20).map(normalizeWidget) : [];
+function normalizeStatusBar(value) {
+    if (!value || typeof value !== 'object' || !value.config) return null;
+    const raw = value.config;
+    const fields = Array.isArray(raw.fields) ? raw.fields.slice(0, 40).map((item, index) => ({
+        id: String(item?.id || ('field-' + index)).slice(0, 60),
+        label: String(item?.label || item?.id || ('欄位 ' + (index + 1))).slice(0, 80),
+        type: String(item?.type || 'text').slice(0, 40),
+        value: Array.isArray(item?.value) ? item.value.slice(0, 20).map(String) : (typeof item?.value === 'number' ? item.value : String(item?.value ?? '—').slice(0, 1000)),
+    })) : [];
+    const affinities = Array.isArray(raw.affinities) ? raw.affinities.slice(0, 30).map((item, index) => ({
+        id: String(item?.id || ('affinity-' + index)).slice(0, 60),
+        name: String(item?.name || item?.id || ('角色 ' + (index + 1))).slice(0, 80),
+        value: Math.max(0, Number(item?.value) || 0),
+        max: Math.max(1, Number(item?.max) || 100),
+    })) : [];
+    const resources = Array.isArray(raw.resources) ? raw.resources.slice(0, 200).map((item, index) => ({
+        id: String(item?.id || ('resource-' + index)).slice(0, 80),
+        name: String(item?.name || item?.id || ('資源 ' + (index + 1))).slice(0, 100),
+        category: String(item?.category || 'item').slice(0, 40),
+        initial: Math.max(0, Math.round(Number(item?.initial ?? item?.value) || 0)),
+        max: Math.max(1, Math.round(Number(item?.max) || 1)),
+    })) : [];
+    const modes = Array.isArray(raw.modes) ? raw.modes.slice(0, 12).map((item, index) => ({
+        id: String(item?.id || ('mode-' + index)).slice(0, 40),
+        name: String(item?.name || item?.id || ('模式 ' + (index + 1))).slice(0, 60),
+        fields: Array.isArray(item?.fields) ? item.fields.slice(0, 40).map(String) : [],
+    })) : [];
+    if (!fields.length && !affinities.length && !resources.length) throw new Error('檔案中沒有可顯示的欄位、好感度或資源。');
+    const defaultMode = String(raw.meta?.defaultMode || modes[0]?.id || 'status');
+    const config = {
+        title: String(raw.meta?.title || value.name || '互動狀態欄').slice(0, 100),
+        schemaVersion: Number(raw.meta?.schemaVersion) || 1,
+        defaultMode,
+        theme: {
+            background: statusBarColor(raw.theme?.background, '#111313'),
+            panel: statusBarColor(raw.theme?.panel, '#171817'),
+            panelSoft: statusBarColor(raw.theme?.panelSoft, '#1d1e1d'),
+            border: statusBarColor(raw.theme?.border, '#343331'),
+            text: statusBarColor(raw.theme?.text, '#e8e4dc'),
+            muted: statusBarColor(raw.theme?.muted, '#9d9a94'),
+            accent: statusBarColor(raw.theme?.accent, '#d6c49a'),
+        },
+        modes: modes.length ? modes : [{ id: 'status', name: '狀態', fields: fields.map((item) => item.id) }],
+        fields,
+        affinities,
+        affinityBadges: Array.isArray(raw.affinityBadges) ? raw.affinityBadges.slice(0, 20).map((item) => ({ below: Number(item?.below) || 101, label: String(item?.label || '').slice(0, 50) })) : [],
+        resourcePolicy: {
+            aiEnabled: raw.resourcePolicy?.aiEnabled !== false,
+            aiPrompt: String(raw.resourcePolicy?.aiPrompt || '任一角色在劇情中給予玩家＝增加、任一角色從玩家身上取走或消耗＝減少、玩家主動消耗＝減少').slice(0, 4000),
+            amount: Math.max(1, Math.round(Number(raw.resourcePolicy?.buttonAction?.amount) || 1)),
+        },
+        resources,
+        dynamicMessages: Array.isArray(raw.dynamicMessages) ? raw.dynamicMessages.slice(0, 20).map((item) => ({ id: String(item?.id || ''), name: String(item?.name || ''), value: String(item?.value || ''), rule: String(item?.rule || '').slice(0, 4000) })) : [],
+    };
+    const defaults = createStatusBarState(config);
+    const sourceState = value.state && typeof value.state === 'object' ? value.state : {};
+    const state = {
+        ...defaults,
+        fields: { ...defaults.fields, ...(sourceState.fields && typeof sourceState.fields === 'object' ? sourceState.fields : {}) },
+        affinities: { ...defaults.affinities },
+        resources: { ...defaults.resources },
+        memo: typeof sourceState.memo === 'string' ? sourceState.memo.slice(0, 6000) : defaults.memo,
+        mode: config.modes.some((item) => item.id === sourceState.mode) ? sourceState.mode : defaults.mode,
+        collapsed: Boolean(sourceState.collapsed),
+        hidden: Boolean(sourceState.hidden),
+        lastAction: sourceState.lastAction && typeof sourceState.lastAction === 'object' ? sourceState.lastAction : null,
+        textLedger: sourceState.textLedger && typeof sourceState.textLedger === 'object' ? sourceState.textLedger : {},
+        recentTransactions: Array.isArray(sourceState.recentTransactions) ? sourceState.recentTransactions.slice(-30) : [],
+    };
+    for (const item of config.affinities) state.affinities[item.id] = Math.max(0, Math.min(item.max, Number(sourceState.affinities?.[item.id] ?? item.value) || 0));
+    for (const item of config.resources) state.resources[item.id] = Math.max(0, Math.min(item.max, Math.round(Number(sourceState.resources?.[item.id] ?? item.initial) || 0)));
+    return {
+        enabled: value.enabled !== false,
+        name: String(value.name || config.title).slice(0, 100),
+        sourceId: String(value.sourceId || '').slice(0, 120),
+        sourceType: String(value.sourceType || 'script').slice(0, 40),
+        sourceInfo: String(value.sourceInfo || '').slice(0, 3000),
+        marker: /^[A-Z][A-Z0-9_]{2,50}$/.test(String(value.marker || '')) ? String(value.marker) : 'MOLAN_STATUS',
+        importedAt: Math.max(0, Number(value.importedAt) || Date.now()),
+        config,
+        state,
+    };
+}
+
+function parseStatusBarFile(parsed, filename = '') {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('檔案根層必須是 JSON 物件。');
+    const config = parsed.meta && (parsed.fields || parsed.resources) ? parsed : findAssignedJsonObject(parsed.content);
+    const markerMatch = String(parsed.content || '').match(/<!--\s*([A-Z][A-Z0-9_]*STATUS)\b/);
+    return normalizeStatusBar({
+        enabled: parsed.enabled !== false,
+        name: parsed.name || config.meta?.title || filename.replace(/\.json$/i, ''),
+        sourceId: parsed.id || '',
+        sourceType: parsed.type || 'config',
+        sourceInfo: parsed.info || '',
+        marker: markerMatch?.[1] || 'MOLAN_STATUS',
+        importedAt: Date.now(),
+        config,
+    });
 }
 
 function escapeHtml(value) {
@@ -385,7 +461,7 @@ function entityRole(entity) {
 }
 
 function getChatMeta(context = getContext()) {
-    const defaults = { relationship: 50, memory: '', memorySummary: structuredClone(DEFAULT_MEMORY), usage: structuredClone(EMPTY_USAGE), creatorWidgets: [], activeWidgetId: '' };
+    const defaults = { relationship: 50, memory: '', memorySummary: structuredClone(DEFAULT_MEMORY), usage: structuredClone(EMPTY_USAGE), statusBar: null };
     const stored = context?.chatMetadata?.[MODULE_NAME];
     if (!stored || typeof stored !== 'object') return defaults;
     return {
@@ -393,8 +469,7 @@ function getChatMeta(context = getContext()) {
         memory: typeof stored.memory === 'string' ? stored.memory : '',
         memorySummary: normalizeMemory(stored.memorySummary, stored.memory),
         usage: normalizeUsage(stored.usage),
-        creatorWidgets: normalizeWidgets(stored.creatorWidgets),
-        activeWidgetId: typeof stored.activeWidgetId === 'string' ? stored.activeWidgetId : '',
+        statusBar: normalizeStatusBar(stored.statusBar),
     };
 }
 
@@ -744,11 +819,10 @@ function applyMemoryInjection() {
         ? '以下是使用者確認過、供後續對話參考的長期記憶。若與最新對話衝突，以最新對話為準。\n\n' + memory.content.trim()
         : '';
     context.setExtensionPrompt('molan_gallery_memory_summary', value, 0, 0, false, 0);
-    const widget = activeCreatorWidget(getChatMeta(context));
-    const widgetValue = widget
-        ? '目前聊天室套用了互動式狀態小工具「' + widget.name + '」。請在回覆時遵守以下狀態規則，但不要在正文輸出 HTML、JSON 或狀態欄。\n\n規則：' + widget.instruction + '\n\n目前狀態：\n' + JSON.stringify(Object.fromEntries(widget.states.map((state) => [state.key, state.value])))
-        : '';
-    context.setExtensionPrompt('molan_gallery_creator_widget', widgetValue, 0, 0, false, 0);
+    context.setExtensionPrompt('molan_gallery_creator_widget', '', 0, 0, false, 0);
+    const statusBar = getChatMeta(context).statusBar;
+    const statusValue = statusBar?.enabled ? buildStatusBarPrompt(statusBar) : '';
+    context.setExtensionPrompt('molan_gallery_statusbar', statusValue, 0, 0, false, 0);
     const entity = currentEntity(context);
     const groupValue = entity?.type === 'group'
         ? '目前是多人群組聊天。每位角色只依自己的角色卡、世界書、後台提示、已知資訊與聊天上下文回覆，維持各自口吻、立場、關係及知識邊界。像真人群聊一樣自然判斷是否需要發言，不必讓所有成員每輪都出聲，不要重複其他角色已說過的內容，也不要替使用者說話、決定動作或描述未表達的內心。單一角色在同一輪玩家訊息後最多回覆 2 次。'
@@ -900,7 +974,7 @@ function createRoot() {
         '    <button class="mol-rail-button" data-action="character-overview" title="角色總覽"><i class="fa-solid fa-address-card"></i></button>',
         '    <button class="mol-rail-button" data-action="player-profiles" title="玩家設定檔"><i class="fa-solid fa-user-pen"></i></button>',
         '    <button class="mol-rail-button" data-action="world-info" title="世界書"><i class="fa-solid fa-book-atlas"></i></button>',
-        '    <button class="mol-rail-button" data-action="creator-widgets" title="創作者小工具"><i class="fa-solid fa-screwdriver-wrench"></i></button>',
+        '    <button class="mol-rail-button" data-action="statusbar-manager" title="互動狀態欄"><i class="fa-solid fa-table-list"></i></button>',
         '    <button class="mol-rail-button" data-action="continue" title="續寫"><i class="fa-solid fa-wand-magic-sparkles"></i></button>',
         '  </nav>',
         '  <div class="mol-rail-bottom"><button class="mol-profile-dot" data-action="player-profiles" title="玩家設定檔">U</button><button class="mol-rail-settings" data-action="user-settings" title="藝廊介面設定"><i class="fa-solid fa-gear"></i></button></div>',
@@ -945,7 +1019,7 @@ function createRoot() {
         '    <button data-action="player-profiles"><span class="mol-context-icon"><i class="fa-solid fa-user-pen"></i></span><span><strong>玩家設定檔</strong><small id="mol-player-summary">新增、修改、刪除與切換</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="world-info"><span class="mol-context-icon"><i class="fa-solid fa-book-atlas"></i></span><span><strong>世界書</strong><small id="mol-world-count">在藝廊內查看</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="memory-summary"><span class="mol-context-icon"><i class="fa-solid fa-leaf"></i></span><span><strong>記憶自動摘要</strong><small id="mol-memory-summary">尚未建立摘要</small></span><i class="fa-solid fa-chevron-right"></i></button>',
-        '    <button data-action="creator-widgets"><span class="mol-context-icon"><i class="fa-solid fa-screwdriver-wrench"></i></span><span><strong>創作者小工具</strong><small id="mol-widget-summary">目前聊天室尚未套用</small></span><i class="fa-solid fa-chevron-right"></i></button>',
+        '    <button data-action="statusbar-manager"><span class="mol-context-icon"><i class="fa-solid fa-table-list"></i></span><span><strong>互動狀態欄</strong><small id="mol-statusbar-summary">匯入酒館助手狀態欄 JSON</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="generation-settings"><span class="mol-context-icon"><i class="fa-solid fa-sliders"></i></span><span><strong>生成中心</strong><small>模型、狀態與生成操作</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '    <button data-action="usage-stats"><span class="mol-context-icon"><i class="fa-solid fa-chart-simple"></i></span><span><strong>API 用量</strong><small id="mol-usage-summary">等待實際回傳</small></span><i class="fa-solid fa-chevron-right"></i></button>',
         '  </div>',
@@ -1149,55 +1223,55 @@ function formattedMessage(message, index, context) {
     }
 }
 
-function activeCreatorWidget(meta = getChatMeta()) {
-    const widget = meta.creatorWidgets.find((item) => item.id === meta.activeWidgetId);
-    return widget?.enabled ? widget : null;
+function activeStatusBar(meta = getChatMeta()) {
+    return meta.statusBar?.enabled && !meta.statusBar.state.hidden ? meta.statusBar : null;
 }
 
-function renderWidgetValue(state) {
-    const value = escapeHtml(state.value);
-    if (state.type === 'progress') {
-        const min = Number(state.min || 0);
-        const max = Number(state.max || 100);
-        const current = Number(state.value || 0);
-        const percent = Math.max(0, Math.min(100, ((current - min) / Math.max(1, max - min)) * 100));
-        return '<span class="mol-widget-progress"><strong>' + value + '</strong><i><b style="width:' + percent + '%"></b></i></span>';
-    }
-    if (state.type === 'toggle') return '<span class="mol-widget-toggle-value">' + (state.value ? 'ON' : 'OFF') + '</span>';
-    return '<span class="mol-widget-value">' + value + '</span>';
+function statusBarAffinityBadge(statusBar, value) {
+    return statusBar.config.affinityBadges.find((item) => value < item.below)?.label || '';
 }
 
-function renderCreatorWidgetMarkup(widget = activeCreatorWidget()) {
-    if (!widget) return '';
-    const purifier = globalThis.SillyTavern?.libs?.DOMPurify;
-    let html = String(widget.template || WIDGET_PRESETS[widget.theme] || WIDGET_PRESETS.blue)
-        .replace(/url\s*\(/gi, 'blocked(')
-        .replace(/@import\s+[^;]+;?/gi, '')
-        .replace(/position\s*:\s*(fixed|sticky)/gi, 'position:relative')
-        .replace(/z-index\s*:\s*[^;"']+;?/gi, '')
-        .replace(/\bmol-[\w-]+/gi, 'widget-safe');
-    html = purifier?.sanitize?.(html, { ALLOW_DATA_ATTR: false, FORBID_TAGS: ['script', 'style', 'link', 'meta', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'option'], FORBID_ATTR: ['id', 'src', 'srcset', 'href', 'formaction'] }) ?? escapeHtml(html);
-    const usedStates = new Set();
-    for (const state of widget.states) {
-        const token = '{{' + state.key + '}}';
-        if (html.includes(token)) {
-            usedStates.add(state.key);
-            html = html.split(token).join('<span class="mol-widget-state" title="' + escapeHtml(state.label) + '">' + renderWidgetValue(state) + '</span>');
-        }
-    }
-    const usedActions = new Set();
-    html = html.replace(/\{\{action:([^}]+)\}\}/g, (_match, id) => {
-        const action = widget.actions.find((item) => item.id === String(id).trim());
-        if (!action) return '';
-        usedActions.add(action.id);
-        return '<button type="button" class="mol-widget-action" data-action="widget-run" data-widget-action-id="' + escapeHtml(action.id) + '">' + escapeHtml(action.label) + '</button>';
-    });
-    html = purifier?.sanitize?.(html, { FORBID_TAGS: ['script', 'style', 'link', 'meta', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'option'], FORBID_ATTR: ['id', 'src', 'srcset', 'href', 'formaction'] }) ?? html;
-    const remainingStates = widget.states.filter((state) => !usedStates.has(state.key));
-    const remainingActions = widget.actions.filter((action) => !usedActions.has(action.id));
-    const stateGrid = remainingStates.length ? '<div class="mol-widget-default-grid">' + remainingStates.map((state) => '<div><span>' + escapeHtml(state.label) + '</span>' + renderWidgetValue(state) + '</div>').join('') + '</div>' : '';
-    const actions = remainingActions.length ? '<div class="mol-widget-default-actions">' + remainingActions.map((action) => '<button type="button" class="mol-widget-action" data-action="widget-run" data-widget-action-id="' + escapeHtml(action.id) + '">' + escapeHtml(action.label) + '</button>').join('') + '</div>' : '';
-    return '<section class="mol-creator-widget theme-' + escapeHtml(widget.theme) + '" data-widget-id="' + escapeHtml(widget.id) + '"><div class="mol-widget-toolbar"><span>CREATOR WIDGET · ' + escapeHtml(widget.name) + '</span><button type="button" data-action="creator-widgets" title="編輯創作者小工具"><i class="fa-solid fa-pen"></i></button></div><div class="mol-widget-content">' + html + stateGrid + actions + '</div></section>';
+function renderStatusBarFields(statusBar, mode) {
+    const selected = mode.fields.length ? statusBar.config.fields.filter((item) => mode.fields.includes(item.id)) : statusBar.config.fields;
+    const fields = selected.map((item) => {
+        const value = statusBar.state.fields[item.id];
+        const text = Array.isArray(value) ? (value.length ? value.join('、') : '—') : String(value ?? '—');
+        return '<div class="mol-statusbar-card' + (item.type === 'list' || item.id === 'currentSituation' ? ' wide' : '') + '"><span>' + escapeHtml(item.label) + '</span><strong>' + escapeHtml(text) + '</strong></div>';
+    }).join('');
+    const affinities = statusBar.config.affinities.map((item) => {
+        const value = Math.max(0, Math.min(item.max, Number(statusBar.state.affinities[item.id]) || 0));
+        const percent = (value / item.max) * 100;
+        return '<div class="mol-statusbar-affinity"><div><strong>' + escapeHtml(item.name) + '</strong><span>' + escapeHtml(statusBarAffinityBadge(statusBar, value)) + ' · ' + value + '</span></div><i><b style="width:' + percent + '%"></b></i></div>';
+    }).join('');
+    const memo = statusBar.state.memo ? '<div class="mol-statusbar-memo"><span>備忘錄</span><p>' + escapeHtml(statusBar.state.memo) + '</p></div>' : '';
+    return '<div class="mol-statusbar-field-grid">' + fields + '</div>' + (affinities ? '<div class="mol-statusbar-section-title">角色關係</div><div class="mol-statusbar-affinity-grid">' + affinities + '</div>' : '') + memo;
+}
+
+function renderStatusBarResources(statusBar, mode) {
+    const category = mode.id === 'food' ? 'food' : (mode.id === 'items' ? 'item' : mode.id);
+    const resources = statusBar.config.resources.filter((item) => item.category === category);
+    if (!resources.length) return '<div class="mol-statusbar-empty">此分類目前沒有資源。</div>';
+    return '<div class="mol-statusbar-resource-grid">' + resources.map((item) => {
+        const value = Math.max(0, Math.min(item.max, Number(statusBar.state.resources[item.id]) || 0));
+        return '<div class="mol-statusbar-resource"><span title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + '</span><strong>' + value + ' / ' + item.max + '</strong><button type="button" data-action="statusbar-consume" data-statusbar-resource="' + escapeHtml(item.id) + '"' + (value <= 0 ? ' disabled' : '') + '>使用</button></div>';
+    }).join('') + '</div>';
+}
+
+function renderStatusBarMarkup(statusBar = activeStatusBar()) {
+    if (!statusBar) return '';
+    const mode = statusBar.config.modes.find((item) => item.id === statusBar.state.mode) || statusBar.config.modes[0];
+    const statusMode = mode.fields.length > 0 || mode.id === 'status';
+    const body = statusMode ? renderStatusBarFields(statusBar, mode) : renderStatusBarResources(statusBar, mode);
+    const theme = statusBar.config.theme;
+    const style = '--sb-bg:' + theme.background + ';--sb-panel:' + theme.panel + ';--sb-soft:' + theme.panelSoft + ';--sb-border:' + theme.border + ';--sb-text:' + theme.text + ';--sb-muted:' + theme.muted + ';--sb-accent:' + theme.accent;
+    return [
+        '<section class="mol-statusbar' + (statusBar.state.collapsed ? ' collapsed' : '') + '" style="' + style + '">',
+        '<header><span class="mol-statusbar-seal">晏</span><div><strong>' + escapeHtml(statusBar.config.title) + '</strong><small>匯入狀態欄 · 本聊天室獨立保存</small></div><button type="button" data-action="statusbar-collapse" title="展開或收合"><i class="fa-solid fa-chevron-up"></i></button><button type="button" data-action="statusbar-manager" title="管理互動狀態欄"><i class="fa-solid fa-gear"></i></button></header>',
+        '<nav>' + statusBar.config.modes.map((item) => '<button type="button" data-action="statusbar-mode" data-statusbar-mode="' + escapeHtml(item.id) + '" class="' + (item.id === mode.id ? 'active' : '') + '">' + escapeHtml(item.name) + '</button>').join('') + '</nav>',
+        '<div class="mol-statusbar-body">' + body + '</div>',
+        '<div class="mol-statusbar-summary">' + escapeHtml(String(statusBar.state.fields.time || '狀態已載入')) + ' · 持有 ' + statusBar.config.resources.filter((item) => Number(statusBar.state.resources[item.id]) > 0).length + ' 種資源</div>',
+        '</section>',
+    ].join('');
 }
 
 function renderMessages({ preserveScroll = false } = {}) {
@@ -1205,14 +1279,14 @@ function renderMessages({ preserveScroll = false } = {}) {
     const host = document.getElementById('mol-messages');
     if (!context || !host) return;
     const wasNearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 120;
-    const widget = renderCreatorWidgetMarkup();
+    const statusBar = renderStatusBarMarkup();
     if (!context.chat?.length) {
-        host.innerHTML = widget + '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
+        host.innerHTML = statusBar + '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
         return;
     }
     const entity = currentEntity(context);
     host.innerHTML = [
-        widget,
+        statusBar,
         '<div class="mol-scene"><span>' + escapeHtml(context.chat.length) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p></div>',
         context.chat.map((message, index) => {
             const side = message.is_user ? ' user' : (message.is_system ? ' system' : ' character');
@@ -1281,9 +1355,10 @@ function renderDetail() {
     document.getElementById('mol-memory-summary').textContent = meta.memorySummary.content
         ? truncate(meta.memorySummary.content, 28)
         : (meta.memorySummary.enabled ? '已啟用，等待摘要' : '尚未建立摘要');
-    const widgetSummary = document.getElementById('mol-widget-summary');
-    const widget = activeCreatorWidget(meta);
-    if (widgetSummary) widgetSummary.textContent = widget ? widget.name + (widget.autoUpdate ? ' · AI 自動更新' : '') : '目前聊天室尚未套用';
+    const statusBarSummary = document.getElementById('mol-statusbar-summary');
+    if (statusBarSummary) statusBarSummary.textContent = meta.statusBar
+        ? meta.statusBar.name + (meta.statusBar.enabled ? ' · 已啟用' : ' · 已停用')
+        : '匯入酒館助手狀態欄 JSON';
     let model = context.mainApi || 'Unknown';
     try {
         model = context.getChatCompletionModel?.() || model;
@@ -1613,7 +1688,7 @@ function openMoreDialog() {
         '<button data-action="greeting-selector"><i class="fa-solid fa-book-open"></i><span>切換開場白</span></button>',
         '<button data-action="export-current-chat"><i class="fa-solid fa-file-arrow-down"></i><span>匯出對話 TXT</span></button>',
         '<button data-action="memory-summary"><i class="fa-solid fa-brain"></i><span>記憶自動摘要</span></button>',
-        '<button data-action="creator-widgets"><i class="fa-solid fa-screwdriver-wrench"></i><span>創作者小工具</span></button>',
+        '<button data-action="statusbar-manager"><i class="fa-solid fa-table-list"></i><span>互動狀態欄</span></button>',
         '<button data-action="player-profiles"><i class="fa-solid fa-user-pen"></i><span>玩家設定檔</span></button>',
         '<button data-action="delete-last"><i class="fa-solid fa-trash"></i><span>刪除最後訊息</span></button>',
         '<button data-action="delete-chat" class="danger"><i class="fa-solid fa-trash-can"></i><span>刪除目前聊天室</span></button>',
@@ -2524,65 +2599,36 @@ async function maybeAutoSummarize() {
     try { await generateMemorySummary({ force: false }); } catch (error) { console.error('[墨藍藝廊] 自動摘要失敗', error); }
 }
 
-async function saveCreatorWidgets(widgets, activeWidgetId = '') {
-    const normalized = normalizeWidgets(widgets);
-    const active = normalized.some((item) => item.id === activeWidgetId) ? activeWidgetId : '';
-    await saveChatMeta({ creatorWidgets: normalized, activeWidgetId: active });
+async function saveStatusBar(statusBar) {
+    await saveChatMeta({ statusBar: statusBar ? normalizeStatusBar(statusBar) : null });
+    applyMemoryInjection();
     refreshAll();
 }
 
-function widgetJsonFromForm(form, base = {}) {
-    const values = new FormData(form);
-    let states;
-    let actions;
-    try { states = JSON.parse(String(values.get('states') || '[]')); } catch { throw new Error('狀態值 JSON 格式錯誤。'); }
-    try { actions = JSON.parse(String(values.get('actions') || '[]')); } catch { throw new Error('互動動作 JSON 格式錯誤。'); }
-    if (!Array.isArray(states) || !Array.isArray(actions)) throw new Error('狀態值與互動動作必須使用 JSON 陣列。');
-    return normalizeWidget({
-        ...base,
-        name: String(values.get('name') || '').trim(),
-        enabled: values.get('enabled') === 'on',
-        autoUpdate: values.get('autoUpdate') === 'on',
-        theme: String(values.get('theme') || 'blue'),
-        instruction: String(values.get('instruction') || '').trim(),
-        template: String(values.get('template') || ''),
-        states,
-        actions,
-    });
+function buildStatusBarPrompt(statusBar) {
+    const config = statusBar.config;
+    const state = statusBar.state;
+    const marker = statusBar.marker;
+    const resourceCatalog = config.resources.map((item) => item.id + '=' + item.name + '(上限' + item.max + ')').join('；');
+    const affinityCatalog = config.affinities.map((item) => item.id + '=' + item.name).join('；');
+    return [
+        '【' + config.title + '｜回合狀態更新規則】',
+        '請依本回合實際完成的劇情更新狀態，不得虛構未發生的事件。',
+        config.resourcePolicy.aiPrompt,
+        '目前狀態：' + JSON.stringify({ fields: state.fields, affinities: state.affinities, resources: state.resources, memo: state.memo, lastButtonAction: state.lastAction }),
+        resourceCatalog ? '合法資源 ID：' + resourceCatalog : '',
+        affinityCatalog ? '好感角色 ID：' + affinityCatalog + '。好感值必須介於 0 與各角色上限之間。' : '',
+        '回覆正文結束後，額外輸出以下 HTML 註解，不可包在程式碼區塊內，也不要解釋它：',
+        '<!--' + marker,
+        '{"fields":{"欄位id":"更新後的值"},"affinities":[{"id":"角色id","value":50}],"resources":[{"id":"資源id","value":0}],"memo":"待辦內容"}',
+        '-->',
+        'fields、affinities、resources 只需列本回合需要更新者；value 必須是更新後的絕對值，不是增減量。沒有變動時使用空物件或空陣列。',
+        config.dynamicMessages.map((item) => item.rule).filter(Boolean).join('\n'),
+        '若 lastButtonAction 已記錄物品使用，本回合不得對同一次動作再次扣除。HTML 註解不屬於故事正文。',
+    ].filter(Boolean).join('\n');
 }
 
-function extractJsonObject(value) {
-    const text = String(value || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start < 0 || end <= start) throw new Error('AI 未回傳可讀取的 JSON。');
-    return JSON.parse(text.slice(start, end + 1));
-}
-
-async function createWidgetWithAI(description, current) {
-    const context = getContext();
-    if (!context?.generateQuietPrompt) throw new Error('目前 SillyTavern 版本不支援背景生成。');
-    const prompt = [
-        '你是 SillyTavern 聊天室狀態小工具設計師。請依需求輸出一個 JSON 物件，不要輸出說明或 Markdown。',
-        '使用者需求：\n' + description,
-        'JSON 欄位：name, theme, instruction, template, states, actions。',
-        'theme 只能是 blue、pastel、dark、rpg、minimal。',
-        'states 每項格式：{"key":"狀態名稱","label":"顯示名稱","value":"初始值","type":"text|number|progress|toggle","min":0,"max":100,"instruction":"AI 更新規則"}。',
-        'actions 每項格式：{"id":"英文或數字ID","label":"按鈕文字","type":"send|command|increment|decrement|set|toggle","payload":"訊息、指令、數值或設定值","key":"要修改的狀態key"}。',
-        'template 可使用安全 HTML 與 inline CSS；以 {{狀態key}} 插入狀態，以 {{action:動作ID}} 插入互動按鈕。禁止 script、iframe、外部網址、圖片與事件屬性。',
-        '請保持版面精簡，適合聊天視窗頂部。所有狀態 key 必須明確，所有 action token 必須有對應 actions。',
-        '目前草稿供參考：\n' + JSON.stringify({ name: current.name, theme: current.theme, states: current.states, actions: current.actions }),
-    ].join('\n\n');
-    permitManualGeneration(120000);
-    try {
-        const result = await context.generateQuietPrompt({ quietPrompt: prompt, trimToSentence: false, removeReasoning: true });
-        return normalizeWidget({ ...current, ...extractJsonObject(result), id: current.id });
-    } finally {
-        manualGenerationPermitUntil = 0;
-    }
-}
-
-function openCreatorWidgetsPanel() {
+function openStatusBarManager() {
     closeDialog();
     const context = getContext();
     const layer = document.getElementById('mol-dialog');
@@ -2590,198 +2636,107 @@ function openCreatorWidgetsPanel() {
         notify('請先開啟一個聊天室。', 'warning');
         return;
     }
-    const meta = getChatMeta(context);
-    const cards = meta.creatorWidgets.map((widget) => {
-        const active = widget.id === meta.activeWidgetId && widget.enabled;
-        return '<article class="mol-widget-manager-card' + (active ? ' active' : '') + '"><div><strong>' + escapeHtml(widget.name) + '</strong><small>' + escapeHtml(widget.theme) + ' · ' + widget.states.length + ' 個狀態 · ' + widget.actions.length + ' 個互動' + (widget.autoUpdate ? ' · AI 自動更新' : '') + '</small></div><span>' + (active ? '套用中' : '未套用') + '</span><button data-action="edit-creator-widget" data-widget-id="' + escapeHtml(widget.id) + '">修改／預覽</button><button data-action="activate-creator-widget" data-widget-id="' + escapeHtml(widget.id) + '">' + (active ? '停用' : '套用') + '</button><button data-action="export-creator-widget" data-widget-id="' + escapeHtml(widget.id) + '">匯出</button><button data-action="delete-creator-widget" data-widget-id="' + escapeHtml(widget.id) + '" class="danger">刪除</button></article>';
-    }).join('');
-    layer.innerHTML = '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">CREATOR TOOLS</p><h3>創作者小工具</h3><p class="mol-dialog-hint">小工具只套用於目前聊天室。可用 AI 製作或手動編輯狀態、更新規則、安全 HTML 模板與互動按鈕。</p><div class="mol-panel-toolbar"><button class="primary" data-action="new-creator-widget"><i class="fa-solid fa-plus"></i> 新增小工具</button><button data-action="import-creator-widget"><i class="fa-solid fa-file-import"></i> 匯入 JSON</button></div><input id="mol-widget-import" type="file" accept=".json,application/json" hidden><div class="mol-widget-manager-list">' + (cards || '<p class="mol-dialog-copy">目前聊天室尚未建立小工具。</p>') + '</div></div>';
+    const statusBar = getChatMeta(context).statusBar;
+    const summary = statusBar ? [
+        '<article class="mol-statusbar-manager-card"><div><strong>' + escapeHtml(statusBar.name) + '</strong><small>' + statusBar.config.fields.length + ' 個欄位 · ' + statusBar.config.affinities.length + ' 名角色 · ' + statusBar.config.resources.length + ' 項資源</small></div><span>' + (statusBar.enabled ? '已啟用' : '已停用') + '</span></article>',
+        '<p class="mol-dialog-hint">' + escapeHtml(statusBar.sourceInfo || '狀態與資源會依目前聊天室分別保存。') + '</p>',
+        '<div class="mol-panel-toolbar"><button data-action="toggle-statusbar">' + (statusBar.enabled ? '停用狀態欄' : '啟用狀態欄') + '</button><button data-action="reset-statusbar">重置數值</button><button data-action="export-statusbar-state">匯出目前狀態</button><button data-action="remove-statusbar" class="danger">移除狀態欄</button></div>',
+    ].join('') : '<div class="mol-statusbar-import-empty"><i class="fa-solid fa-file-code"></i><strong>尚未匯入互動狀態欄</strong><p>可讀取酒館助手角色腳本 JSON，安全解析 CONFIG、顯示模式、好感度、資源、備忘錄與按鈕；不會執行檔案中的任意 JavaScript。</p></div>';
+    layer.innerHTML = [
+        '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">INTERACTIVE STATUS BAR</p><h3>互動狀態欄</h3>',
+        summary,
+        '<div class="mol-panel-toolbar mol-statusbar-import-actions"><button class="primary" data-action="import-statusbar"><i class="fa-solid fa-file-import"></i> ' + (statusBar ? '重新匯入／替換 JSON' : '匯入酒館助手 JSON') + '</button></div>',
+        '<input id="mol-statusbar-import" type="file" accept=".json,application/json" hidden></div>',
+    ].join('');
     layer.hidden = false;
-    const input = layer.querySelector('#mol-widget-import');
+    const input = layer.querySelector('#mol-statusbar-import');
     const onImport = async () => {
         const file = input.files?.[0];
         if (!file) return;
+        if (file.size > MAX_STATUSBAR_FILE_BYTES) {
+            notify('狀態欄檔案不可超過 2 MB。', 'warning');
+            input.value = '';
+            return;
+        }
         try {
             const parsed = JSON.parse(await file.text());
-            const imported = normalizeWidget(Array.isArray(parsed) ? parsed[0] : parsed);
-            imported.id = 'widget-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
-            await saveCreatorWidgets([...meta.creatorWidgets, imported], imported.id);
-            notify('小工具已匯入並套用。');
-            openCreatorWidgetsPanel();
+            const imported = parseStatusBarFile(parsed, file.name);
+            await saveStatusBar(imported);
+            notify('已讀取「' + imported.name + '」，並套用至目前聊天室。');
+            openStatusBarManager();
         } catch (error) {
-            console.error(error);
-            notify('匯入失敗：請選擇有效的小工具 JSON。', 'error');
+            console.error('[墨藍藝廊] 狀態欄匯入失敗', error);
+            notify('匯入失敗：' + (error.message || '請選擇有效的酒館助手狀態欄 JSON。'), 'error');
+        } finally {
+            input.value = '';
         }
     };
     input.addEventListener('change', onImport);
     activeDialogCleanup = () => input.removeEventListener('change', onImport);
 }
 
-function openCreatorWidgetEditor(id = '') {
-    closeDialog();
-    const context = getContext();
-    const layer = document.getElementById('mol-dialog');
-    if (!context?.chatMetadata || !context.chatId || !layer) return;
-    const meta = getChatMeta(context);
-    const original = meta.creatorWidgets.find((item) => item.id === id);
-    let draft = normalizeWidget(original || { ...structuredClone(DEFAULT_WIDGET), id: 'widget-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7) });
-    layer.innerHTML = [
-        '<form class="mol-dialog mol-panel-dialog mol-wide-dialog mol-widget-editor"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">WIDGET STUDIO</p><h3>' + (original ? '修改創作者小工具' : '新增創作者小工具') + '</h3>',
-        '<div class="mol-widget-ai-box"><label><span>告訴 AI 想製作的風格與資訊</span><textarea name="aiDescription" rows="3" placeholder="例如：暗金色奇幻 RPG，顯示地點、HP、金額與夥伴等級，加入休息與前進按鈕。"></textarea></label><button type="button" data-action="ai-create-widget"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 製作／修改</button></div>',
-        '<div class="mol-form-grid"><label><span>小工具名稱</span><input name="name" value="' + escapeHtml(draft.name) + '" required></label><label><span>主題</span><select name="theme"><option value="blue">墨藍</option><option value="pastel">粉彩</option><option value="dark">暗色</option><option value="rpg">RPG</option><option value="minimal">極簡</option></select></label>',
-        '<label class="mol-check-label"><span>啟用小工具</span><input name="enabled" type="checkbox"' + (draft.enabled ? ' checked' : '') + '></label><label class="mol-check-label"><span>每次角色回覆後由 AI 更新狀態</span><input name="autoUpdate" type="checkbox"' + (draft.autoUpdate ? ' checked' : '') + '></label>',
-        '<label class="wide"><span>AI 狀態更新總指示</span><textarea name="instruction" rows="4">' + escapeHtml(draft.instruction) + '</textarea></label>',
-        '<label class="wide"><span>狀態值 JSON</span><small>type 可用 text、number、progress、toggle</small><textarea name="states" rows="12">' + escapeHtml(JSON.stringify(draft.states, null, 2)) + '</textarea></label>',
-        '<label class="wide"><span>互動動作 JSON</span><small>type 可用 send、command、increment、decrement、set、toggle</small><textarea name="actions" rows="10">' + escapeHtml(JSON.stringify(draft.actions, null, 2)) + '</textarea></label>',
-        '<label class="wide"><span>安全 HTML 模板</span><small>狀態：{{狀態key}}　按鈕：{{action:動作ID}}；不執行 script、外部連結或事件屬性</small><textarea name="template" rows="13">' + escapeHtml(draft.template) + '</textarea></label></div>',
-        '<div class="mol-widget-preview-heading"><span>即時預覽</span><select name="preset"><option value="">載入範例版型…</option><option value="blue">墨藍狀態</option><option value="pastel">粉彩校園</option><option value="dark">懸疑案件</option><option value="rpg">奇幻 RPG</option><option value="minimal">米色極簡</option></select></div><div class="mol-widget-preview"></div>',
-        '<div class="mol-dialog-actions"><button type="button" data-action="creator-widgets">取消</button><button type="submit" class="primary">儲存並套用</button></div></form>',
-    ].join('');
-    layer.hidden = false;
-    const form = layer.querySelector('form');
-    form.elements.theme.value = draft.theme;
-    const preview = form.querySelector('.mol-widget-preview');
-    const refreshPreview = () => {
-        try { draft = widgetJsonFromForm(form, draft); preview.innerHTML = renderCreatorWidgetMarkup(draft); }
-        catch (error) { preview.innerHTML = '<p class="mol-dialog-copy">' + escapeHtml(error.message) + '</p>'; }
-    };
-    const onInput = () => refreshPreview();
-    const onPreset = () => {
-        const preset = form.elements.preset.value;
-        if (!preset) return;
-        form.elements.theme.value = preset;
-        form.elements.template.value = WIDGET_PRESETS[preset];
-        refreshPreview();
-    };
-    const onPreviewClick = (event) => { event.preventDefault(); event.stopPropagation(); };
-    const onAi = async (event) => {
-        event.preventDefault();
-        const description = String(form.elements.aiDescription.value || '').trim();
-        if (!description) { notify('請先描述想要的小工具。', 'warning'); return; }
-        const button = form.querySelector('[data-action="ai-create-widget"]');
-        button.disabled = true;
-        button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> AI 製作中…';
-        try {
-            draft = await createWidgetWithAI(description, widgetJsonFromForm(form, draft));
-            form.elements.name.value = draft.name;
-            form.elements.theme.value = draft.theme;
-            form.elements.instruction.value = draft.instruction;
-            form.elements.states.value = JSON.stringify(draft.states, null, 2);
-            form.elements.actions.value = JSON.stringify(draft.actions, null, 2);
-            form.elements.template.value = draft.template;
-            refreshPreview();
-            notify('AI 小工具已產生，可繼續修改後儲存。');
-        } catch (error) {
-            console.error(error);
-            notify(error.message || 'AI 小工具製作失敗。', 'error');
-        } finally {
-            button.disabled = false;
-            button.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> AI 製作／修改';
-        }
-    };
-    const onSubmit = async (event) => {
-        event.preventDefault();
-        try {
-            draft = widgetJsonFromForm(form, draft);
-            const widgets = original ? meta.creatorWidgets.map((item) => item.id === original.id ? draft : item) : [...meta.creatorWidgets, draft];
-            await saveCreatorWidgets(widgets, draft.enabled ? draft.id : '');
-            notify('創作者小工具已儲存並套用。');
-            openCreatorWidgetsPanel();
-        } catch (error) { notify(error.message || '無法儲存小工具。', 'error'); }
-    };
-    form.addEventListener('input', onInput);
-    form.elements.preset.addEventListener('change', onPreset);
-    preview.addEventListener('click', onPreviewClick);
-    form.querySelector('[data-action="ai-create-widget"]').addEventListener('click', onAi);
-    form.addEventListener('submit', onSubmit);
-    refreshPreview();
-    activeDialogCleanup = () => {
-        form.removeEventListener('input', onInput);
-        form.elements.preset.removeEventListener('change', onPreset);
-        preview.removeEventListener('click', onPreviewClick);
-        form.querySelector('[data-action="ai-create-widget"]')?.removeEventListener('click', onAi);
-        form.removeEventListener('submit', onSubmit);
-    };
+async function updateStatusBarState(mutator) {
+    const statusBar = getChatMeta().statusBar;
+    if (!statusBar) return;
+    const next = normalizeStatusBar(statusBar);
+    mutator(next.state, next);
+    await saveStatusBar(next);
 }
 
-function expandWidgetText(value, widget) {
-    const context = getContext();
-    let text = String(value || '').replaceAll('{{char}}', context?.name2 || '角色').replaceAll('{{user}}', context?.name1 || '使用者');
-    for (const state of widget.states) text = text.split('{{' + state.key + '}}').join(String(state.value ?? ''));
-    return text;
-}
-
-async function runCreatorWidgetAction(actionId) {
-    const context = getContext();
-    const meta = getChatMeta(context);
-    const widget = activeCreatorWidget(meta);
-    const action = widget?.actions.find((item) => item.id === actionId);
-    if (!context || !widget || !action) return;
-    if (action.type === 'send') {
-        const text = expandWidgetText(action.payload, widget).trim();
-        const nativeTextarea = document.getElementById('send_textarea');
-        const nativeSend = document.getElementById('send_but');
-        if (!text || !(nativeTextarea instanceof HTMLTextAreaElement) || !(nativeSend instanceof HTMLElement)) { notify('此按鈕沒有可送出的內容。', 'warning'); return; }
-        nativeTextarea.value = text;
-        nativeTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-        permitManualGeneration();
-        nativeSend.click();
+async function runStatusBarResourceAction(resourceId) {
+    const statusBar = getChatMeta().statusBar;
+    const resource = statusBar?.config.resources.find((item) => item.id === resourceId);
+    if (!statusBar || !resource) return;
+    const current = Number(statusBar.state.resources[resource.id]) || 0;
+    if (current <= 0) {
+        notify('目前沒有「' + resource.name + '」。', 'warning');
         return;
     }
-    if (action.type === 'command') {
-        const command = expandWidgetText(action.payload, widget).trim();
-        if (!command) { notify('此按鈕沒有設定 Slash Command。', 'warning'); return; }
-        permitManualGeneration();
-        await context.executeSlashCommandsWithOptions(command.startsWith('/') ? command : '/' + command);
-        manualGenerationPermitUntil = 0;
-        notify('小工具指令已執行。');
-        refreshAll();
-        return;
-    }
-    const states = widget.states.map((state) => {
-        if (state.key !== action.key) return state;
-        if (action.type === 'increment' || action.type === 'decrement') {
-            const delta = Number(action.payload || 1) * (action.type === 'decrement' ? -1 : 1);
-            const value = Math.max(Number(state.min ?? -Infinity), Math.min(Number(state.max ?? Infinity), Number(state.value || 0) + delta));
-            return { ...state, value };
-        }
-        if (action.type === 'toggle') return { ...state, value: !Boolean(state.value) };
-        return { ...state, value: action.payload };
+    await updateStatusBarState((state, bar) => {
+        const amount = bar.config.resourcePolicy.amount;
+        state.resources[resource.id] = Math.max(0, current - amount);
+        state.lastAction = { type: 'consume', id: resource.id, name: resource.name, amount, at: Date.now() };
     });
-    const updated = { ...widget, states };
-    await saveCreatorWidgets(meta.creatorWidgets.map((item) => item.id === widget.id ? updated : item), widget.id);
-    notify('小工具狀態已更新。');
+    notify('已使用「' + resource.name + '」，剩餘 ' + Math.max(0, current - statusBar.config.resourcePolicy.amount) + '。');
 }
 
-async function maybeAutoUpdateCreatorWidget() {
+function statusBarMessageText(message) {
+    return String(message?.mes ?? message?.message ?? '');
+}
+
+async function processStatusBarMessage(messageId) {
     const context = getContext();
-    const meta = getChatMeta(context);
-    const widget = activeCreatorWidget(meta);
-    if (!widget?.autoUpdate || !context?.chat?.length || widgetUpdateRunning || isBusy) return;
-    if (summaryRunning) { setTimeout(maybeAutoUpdateCreatorWidget, 1500); return; }
-    if (context.chat.length <= widget.lastUpdatedMessageCount) return;
-    widgetUpdateRunning = true;
-    permitManualGeneration(120000);
+    const statusBar = getChatMeta(context).statusBar;
+    if (!statusBar?.enabled || !context?.chat?.length) return;
+    const index = Number.isFinite(Number(messageId)) ? Number(messageId) : context.chat.length - 1;
+    const message = context.chat[index] || context.chat.at(-1);
+    const text = statusBarMessageText(message);
+    const match = text.match(new RegExp('<!--\\s*' + statusBar.marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*([\\s\\S]*?)-->', 'i'));
+    if (!match) return;
     try {
-        const transcript = context.chat.slice(-30).map((message) => (message.is_user ? (context.name1 || '使用者') : (message.name || context.name2 || '角色')) + '：' + String(message.mes || '')).join('\n').slice(-30000);
-        const prompt = ['請依照對話更新聊天室小工具狀態。只輸出 JSON 物件，key 必須完全等於狀態 key；無法判斷時保留原值。', '總指示：\n' + widget.instruction, '狀態定義與目前值：\n' + JSON.stringify(widget.states.map((state) => ({ key: state.key, value: state.value, type: state.type, min: state.min, max: state.max, instruction: state.instruction }))), '最新對話：\n' + transcript].join('\n\n');
-        const result = await context.generateQuietPrompt({ quietPrompt: prompt, trimToSentence: false, removeReasoning: true });
-        const values = extractJsonObject(result);
-        const states = widget.states.map((state) => {
-            if (!Object.hasOwn(values, state.key)) return state;
-            const raw = values[state.key];
-            if (['number', 'progress'].includes(state.type)) return { ...state, value: Math.max(state.min, Math.min(state.max, Number(raw) || 0)) };
-            if (state.type === 'toggle') return { ...state, value: typeof raw === 'string' ? ['true', '1', 'yes', 'on', '是'].includes(raw.toLocaleLowerCase()) : Boolean(raw) };
-            return { ...state, value: String(raw ?? '').slice(0, 500) };
+        const update = JSON.parse(match[1].trim());
+        await updateStatusBarState((state, bar) => {
+            const fields = update.fields && typeof update.fields === 'object' ? update.fields : {};
+            for (const item of bar.config.fields) {
+                if (!Object.hasOwn(fields, item.id)) continue;
+                const value = fields[item.id];
+                state.fields[item.id] = Array.isArray(value) ? value.slice(0, 20).map(String) : (typeof value === 'number' ? value : String(value ?? '').slice(0, 1000));
+            }
+            for (const change of Array.isArray(update.affinities) ? update.affinities : []) {
+                const item = bar.config.affinities.find((candidate) => candidate.id === change?.id || candidate.name === change?.name);
+                if (item && Object.hasOwn(change, 'value')) state.affinities[item.id] = Math.max(0, Math.min(item.max, Number(change.value) || 0));
+            }
+            for (const change of Array.isArray(update.resources) ? update.resources : []) {
+                const item = bar.config.resources.find((candidate) => candidate.id === change?.id || candidate.name === change?.name);
+                if (item && Object.hasOwn(change, 'value')) state.resources[item.id] = Math.max(0, Math.min(item.max, Math.round(Number(change.value) || 0)));
+            }
+            if (typeof update.memo === 'string') state.memo = update.memo.trim().slice(0, 6000) || '目前沒有待辦事項';
+            state.lastAction = null;
+            if (Object.hasOwn(state.fields, 'page')) state.fields.page = Math.max(1, context.chat.filter((item) => !item.is_user && !item.is_system).length);
         });
-        const updated = { ...widget, states, lastUpdatedMessageCount: context.chat.length };
-        await saveCreatorWidgets(meta.creatorWidgets.map((item) => item.id === widget.id ? updated : item), widget.id);
     } catch (error) {
-        console.error('[墨藍藝廊] 小工具狀態更新失敗', error);
-        notify('小工具 AI 狀態更新失敗，可在創作者小工具中手動修改。', 'error');
-    } finally {
-        manualGenerationPermitUntil = 0;
-        widgetUpdateRunning = false;
+        console.error('[墨藍藝廊] 狀態欄回合資料解析失敗', error);
+        notify('本回合狀態更新格式有誤，已保留原數值。', 'warning');
     }
 }
 
@@ -3170,42 +3125,55 @@ async function handleRootClick(event) {
         }
         case 'usage-stats': openUsagePanel(); break;
         case 'memory-summary': openMemorySummaryPanel(); break;
-        case 'creator-widgets': openCreatorWidgetsPanel(); break;
-        case 'new-creator-widget': openCreatorWidgetEditor(); break;
-        case 'import-creator-widget': document.getElementById('mol-widget-import')?.click(); break;
-        case 'edit-creator-widget': openCreatorWidgetEditor(actionElement.dataset.widgetId); break;
-        case 'activate-creator-widget': {
-            const meta = getChatMeta(context);
-            const id = actionElement.dataset.widgetId;
-            const activate = meta.activeWidgetId !== id;
-            const widgets = meta.creatorWidgets.map((item) => item.id === id ? { ...item, enabled: activate ? true : item.enabled } : item);
-            await saveCreatorWidgets(widgets, activate ? id : '');
-            notify(activate ? '小工具已套用至目前聊天室。' : '目前聊天室的小工具已停用。');
-            openCreatorWidgetsPanel();
+        case 'statusbar-manager': openStatusBarManager(); break;
+        case 'import-statusbar': document.getElementById('mol-statusbar-import')?.click(); break;
+        case 'statusbar-mode':
+            await updateStatusBarState((state, statusBar) => {
+                if (statusBar.config.modes.some((item) => item.id === actionElement.dataset.statusbarMode)) state.mode = actionElement.dataset.statusbarMode;
+            });
+            break;
+        case 'statusbar-collapse': await updateStatusBarState((state) => { state.collapsed = !state.collapsed; }); break;
+        case 'statusbar-consume': await runStatusBarResourceAction(actionElement.dataset.statusbarResource); break;
+        case 'toggle-statusbar': {
+            const statusBar = getChatMeta(context).statusBar;
+            if (!statusBar) break;
+            statusBar.enabled = !statusBar.enabled;
+            statusBar.state.hidden = false;
+            await saveStatusBar(statusBar);
+            notify(statusBar.enabled ? '互動狀態欄已啟用。' : '互動狀態欄已停用。');
+            openStatusBarManager();
             break;
         }
-        case 'export-creator-widget': {
-            const widget = getChatMeta(context).creatorWidgets.find((item) => item.id === actionElement.dataset.widgetId);
-            if (!widget) break;
-            downloadBlob(new Blob([JSON.stringify(widget, null, 2)], { type: 'application/json;charset=utf-8' }), safeFilename(widget.name, 'creator-widget') + '.json');
-            notify('小工具已匯出。');
-            break;
-        }
-        case 'delete-creator-widget': {
-            const meta = getChatMeta(context);
-            const widget = meta.creatorWidgets.find((item) => item.id === actionElement.dataset.widgetId);
-            if (!widget) break;
-            openConfirmDialog('刪除創作者小工具', '確定刪除「' + widget.name + '」？此操作只影響目前聊天室。', async () => {
-                const widgets = meta.creatorWidgets.filter((item) => item.id !== widget.id);
-                await saveCreatorWidgets(widgets, meta.activeWidgetId === widget.id ? '' : meta.activeWidgetId);
-                notify('小工具已刪除。');
-                openCreatorWidgetsPanel();
+        case 'reset-statusbar': {
+            const statusBar = getChatMeta(context).statusBar;
+            if (!statusBar) break;
+            openConfirmDialog('重置互動狀態欄', '確定將目前聊天室的狀態、好感度、資源與備忘錄恢復為匯入檔的初始值？', async () => {
+                statusBar.state = createStatusBarState(statusBar.config);
+                await saveStatusBar(statusBar);
+                notify('互動狀態欄已重置。');
+                openStatusBarManager();
                 return false;
             });
             break;
         }
-        case 'widget-run': await runCreatorWidgetAction(actionElement.dataset.widgetActionId); break;
-        case 'ai-create-widget': break;
+        case 'export-statusbar-state': {
+            const statusBar = getChatMeta(context).statusBar;
+            if (!statusBar) break;
+            downloadBlob(new Blob([JSON.stringify({ name: statusBar.name, sourceId: statusBar.sourceId, state: statusBar.state }, null, 2)], { type: 'application/json;charset=utf-8' }), safeFilename(statusBar.name, 'interactive-statusbar') + '-state.json');
+            notify('目前聊天室的狀態已匯出。');
+            break;
+        }
+        case 'remove-statusbar': {
+            const statusBar = getChatMeta(context).statusBar;
+            if (!statusBar) break;
+            openConfirmDialog('移除互動狀態欄', '確定移除「' + statusBar.name + '」？此操作只影響目前聊天室。', async () => {
+                await saveStatusBar(null);
+                notify('互動狀態欄已移除。');
+                openStatusBarManager();
+                return false;
+            });
+            break;
+        }
         case 'user-settings': openInternalPanel('user-settings'); break;
         case 'stop-generation': context.stopGeneration(); closeDialog(); break;
         case 'new-chat': await executeNewChat(); break;
@@ -3427,10 +3395,10 @@ function subscribeToSillyTavern() {
         refreshMessages();
         setTimeout(() => { if (isOpen) loadChatEntries(); }, 500);
     });
-    subscribe(events.MESSAGE_RECEIVED, () => { refreshMessages(); setTimeout(maybeAutoSummarize, 250); setTimeout(maybeAutoUpdateCreatorWidget, 700); });
-    subscribe(events.MESSAGE_EDITED, refreshMessages);
+    subscribe(events.MESSAGE_RECEIVED, (messageId) => { refreshMessages(); setTimeout(() => processStatusBarMessage(messageId), 120); setTimeout(maybeAutoSummarize, 250); });
+    subscribe(events.MESSAGE_EDITED, (messageId) => { refreshMessages(); setTimeout(() => processStatusBarMessage(messageId), 120); });
     subscribe(events.MESSAGE_DELETED, refreshMessages);
-    subscribe(events.MESSAGE_SWIPED, refreshMessages);
+    subscribe(events.MESSAGE_SWIPED, (messageId) => { refreshMessages(); setTimeout(() => processStatusBarMessage(messageId), 120); });
     subscribe(events.STREAM_TOKEN_RECEIVED, () => { if (isOpen) scheduleMessageRefresh(); });
     subscribe(events.GROUP_WRAPPER_STARTED, () => {
         groupReplyBatchActive = true;
@@ -3495,7 +3463,7 @@ function subscribeToSillyTavern() {
         disableGroupAutoMode();
         renderComposer();
     });
-    subscribe(events.GENERATION_ENDED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); setTimeout(maybeAutoUpdateCreatorWidget, 700); });
+    subscribe(events.GENERATION_ENDED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); });
     subscribe(events.GENERATION_STOPPED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) renderComposer(); });
     subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
     subscribe(events.MAIN_API_CHANGED, refresh);
@@ -3551,6 +3519,7 @@ export function onDisable() {
     blockedGenerationUntil = 0;
     context?.setExtensionPrompt?.('molan_gallery_memory_summary', '', 0, 0, false, 0);
     context?.setExtensionPrompt?.('molan_gallery_creator_widget', '', 0, 0, false, 0);
+    context?.setExtensionPrompt?.('molan_gallery_statusbar', '', 0, 0, false, 0);
     context?.setExtensionPrompt?.('molan_gallery_group_chat_rules', '', 0, 0, false, 0);
     window.clearTimeout(streamTimer);
     for (const { type, handler } of subscribedEvents.splice(0)) {
