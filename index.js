@@ -1,4 +1,5 @@
 const MODULE_NAME = 'molan_gallery';
+const BUILD_VERSION = '1.11.3-statusbar-bottom';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
@@ -21,6 +22,8 @@ const DEFAULT_MEMORY = Object.freeze({
     updatedAt: 0,
 });
 const MAX_STATUSBAR_FILE_BYTES = 2 * 1024 * 1024;
+const TAVERN_HELPER_STATUSBAR_SELECTOR = '#dayan-statusbar-host-v2';
+const TAVERN_HELPER_STATUSBAR_SLOT_ID = 'mol-tavern-helper-statusbar-slot';
 const DEFAULT_SETTINGS = Object.freeze({
     autoOpen: false,
     compactMessages: false,
@@ -56,6 +59,9 @@ let characterSwipeIgnoreUntil = 0;
 let characterCarouselTransitioning = false;
 let characterCarouselEnterDirection = 0;
 let characterCarouselTransitionTimer = null;
+let tavernHelperStatusBarObserver = null;
+let tavernHelperStatusBarSyncFrame = 0;
+let tavernHelperStatusBarHome = null;
 let nativeFetch = null;
 let fetchWrapper = null;
 let worldInfoModulePromise = null;
@@ -134,6 +140,96 @@ function removeViewportSync() {
     window.removeEventListener('orientationchange', syncDialogViewport);
     window.visualViewport?.removeEventListener('resize', syncDialogViewport);
     window.visualViewport?.removeEventListener('scroll', syncDialogViewport);
+}
+
+function getTavernHelperStatusBar() {
+    return document.querySelector(TAVERN_HELPER_STATUSBAR_SELECTOR);
+}
+
+function isTavernHelperStatusBarBridged() {
+    const host = getTavernHelperStatusBar();
+    return Boolean(host && host.parentElement?.id === TAVERN_HELPER_STATUSBAR_SLOT_ID);
+}
+
+function updateTavernHelperStatusBarSummary() {
+    const summary = document.getElementById('mol-statusbar-summary');
+    if (!summary || !getTavernHelperStatusBar()) return;
+    summary.textContent = isTavernHelperStatusBarBridged()
+        ? '酒館助手狀態欄 · 已同步顯示'
+        : '酒館助手狀態欄 · 等待同步';
+}
+
+function syncTavernHelperStatusBar() {
+    tavernHelperStatusBarSyncFrame = 0;
+    if (!isOpen) return false;
+    const slot = document.getElementById(TAVERN_HELPER_STATUSBAR_SLOT_ID);
+    const host = getTavernHelperStatusBar();
+    if (!slot || !host) {
+        if (slot?.dataset.statusbarSource === 'tavern-helper' && !slot.childElementCount) {
+            delete slot.dataset.statusbarSource;
+            renderStatusBarArea();
+        }
+        updateTavernHelperStatusBarSummary();
+        return false;
+    }
+    if (host.parentElement !== slot) {
+        tavernHelperStatusBarHome = {
+            node: host,
+            parent: host.parentNode,
+            nextSibling: host.nextSibling,
+            hadFallbackClass: host.classList.contains('dy-fallback'),
+        };
+        host.classList.remove('dy-fallback');
+        host.dataset.molanGalleryBridged = 'true';
+        slot.replaceChildren(host);
+    }
+    slot.dataset.statusbarSource = 'tavern-helper';
+    slot.hidden = false;
+    updateTavernHelperStatusBarSummary();
+    return true;
+}
+
+function queueTavernHelperStatusBarSync() {
+    if (tavernHelperStatusBarSyncFrame || !isOpen) return;
+    tavernHelperStatusBarSyncFrame = requestAnimationFrame(syncTavernHelperStatusBar);
+}
+
+function startTavernHelperStatusBarBridge() {
+    syncTavernHelperStatusBar();
+    if (tavernHelperStatusBarObserver || !document.body) return;
+    tavernHelperStatusBarObserver = new MutationObserver(queueTavernHelperStatusBarSync);
+    tavernHelperStatusBarObserver.observe(document.body, { childList: true, subtree: true });
+}
+
+function restoreTavernHelperStatusBar() {
+    const home = tavernHelperStatusBarHome;
+    const host = home?.node || getTavernHelperStatusBar();
+    if (!host || host.parentElement?.id !== TAVERN_HELPER_STATUSBAR_SLOT_ID) {
+        tavernHelperStatusBarHome = null;
+        return;
+    }
+    const fallbackAnchor = document.querySelector('#form_sheld, #send_form, [data-testid="send-form"]');
+    const parent = home?.parent?.isConnected ? home.parent : fallbackAnchor?.parentNode;
+    const nextSibling = home?.nextSibling?.parentNode === parent
+        ? home.nextSibling
+        : (parent === fallbackAnchor?.parentNode ? fallbackAnchor : null);
+    host.removeAttribute('data-molan-gallery-bridged');
+    if (home?.hadFallbackClass) host.classList.add('dy-fallback');
+    if (parent) parent.insertBefore(host, nextSibling || null);
+    const slot = document.getElementById(TAVERN_HELPER_STATUSBAR_SLOT_ID);
+    if (slot) {
+        delete slot.dataset.statusbarSource;
+        slot.hidden = true;
+    }
+    tavernHelperStatusBarHome = null;
+}
+
+function stopTavernHelperStatusBarBridge({ restore = true } = {}) {
+    tavernHelperStatusBarObserver?.disconnect();
+    tavernHelperStatusBarObserver = null;
+    if (tavernHelperStatusBarSyncFrame) cancelAnimationFrame(tavernHelperStatusBarSyncFrame);
+    tavernHelperStatusBarSyncFrame = 0;
+    if (restore) restoreTavernHelperStatusBar();
 }
 
 function normalizeUsage(value) {
@@ -965,6 +1061,7 @@ function createRoot() {
     if (document.getElementById(ROOT_ID)) return;
     const root = document.createElement('div');
     root.id = ROOT_ID;
+    root.dataset.molanGalleryVersion = BUILD_VERSION;
     root.hidden = true;
     root.innerHTML = [
         '<aside class="mol-rail" aria-label="主要導覽">',
@@ -1000,6 +1097,7 @@ function createRoot() {
         '  </header>',
         '  <div class="mol-chapter"><span>LIVE CHAT</span><i></i><span id="mol-chat-name">尚未開啟對話</span></div>',
         '  <div id="mol-messages" class="mol-messages" aria-live="polite"></div>',
+        '  <div id="mol-tavern-helper-statusbar-slot" class="mol-tavern-helper-statusbar-slot" aria-label="酒館助手互動狀態欄" hidden></div>',
         '  <div class="mol-composer-wrap">',
         '    <form id="mol-composer" class="mol-composer">',
         '      <button type="button" data-action="attach" class="mol-add-button" title="加入附件"><i class="fa-solid fa-plus"></i></button>',
@@ -1126,10 +1224,12 @@ function setOpen(value) {
         applyMemoryInjection();
         root.classList.toggle('compact-messages', Boolean(getSettings().compactMessages));
         applyTypographySettings();
+        startTavernHelperStatusBarBridge();
         refreshAll();
         loadChatEntries();
         setTimeout(() => root.querySelector('#mol-draft')?.focus(), 0);
     } else {
+        stopTavernHelperStatusBarBridge();
         closeDialog();
     }
 }
@@ -1258,7 +1358,7 @@ function renderStatusBarResources(statusBar, mode) {
 }
 
 function renderStatusBarMarkup(statusBar = activeStatusBar()) {
-    if (!statusBar) return '';
+    if (!statusBar || isTavernHelperStatusBarBridged()) return '';
     const mode = statusBar.config.modes.find((item) => item.id === statusBar.state.mode) || statusBar.config.modes[0];
     const statusMode = mode.fields.length > 0 || mode.id === 'status';
     const body = statusMode ? renderStatusBarFields(statusBar, mode) : renderStatusBarResources(statusBar, mode);
@@ -1274,19 +1374,39 @@ function renderStatusBarMarkup(statusBar = activeStatusBar()) {
     ].join('');
 }
 
+function renderStatusBarArea() {
+    const slot = document.getElementById(TAVERN_HELPER_STATUSBAR_SLOT_ID);
+    if (!slot) return;
+    if (isTavernHelperStatusBarBridged()) {
+        slot.dataset.statusbarSource = 'tavern-helper';
+        slot.hidden = false;
+        return;
+    }
+    const markup = renderStatusBarMarkup();
+    if (!markup) {
+        if (slot.dataset.statusbarSource === 'internal') slot.replaceChildren();
+        delete slot.dataset.statusbarSource;
+        slot.hidden = true;
+        return;
+    }
+    if (slot.dataset.statusbarSource !== 'internal' || slot.innerHTML !== markup) {
+        slot.innerHTML = markup;
+    }
+    slot.dataset.statusbarSource = 'internal';
+    slot.hidden = false;
+}
+
 function renderMessages({ preserveScroll = false } = {}) {
     const context = getContext();
     const host = document.getElementById('mol-messages');
     if (!context || !host) return;
     const wasNearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 120;
-    const statusBar = renderStatusBarMarkup();
     if (!context.chat?.length) {
-        host.innerHTML = statusBar + '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
+        host.innerHTML = '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
         return;
     }
     const entity = currentEntity(context);
     host.innerHTML = [
-        statusBar,
         '<div class="mol-scene"><span>' + escapeHtml(context.chat.length) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p></div>',
         context.chat.map((message, index) => {
             const side = message.is_user ? ' user' : (message.is_system ? ' system' : ' character');
@@ -1356,9 +1476,9 @@ function renderDetail() {
         ? truncate(meta.memorySummary.content, 28)
         : (meta.memorySummary.enabled ? '已啟用，等待摘要' : '尚未建立摘要');
     const statusBarSummary = document.getElementById('mol-statusbar-summary');
-    if (statusBarSummary) statusBarSummary.textContent = meta.statusBar
-        ? meta.statusBar.name + (meta.statusBar.enabled ? ' · 已啟用' : ' · 已停用')
-        : '匯入酒館助手狀態欄 JSON';
+    if (statusBarSummary) statusBarSummary.textContent = getTavernHelperStatusBar()
+        ? (isTavernHelperStatusBarBridged() ? '酒館助手狀態欄 · 已同步顯示' : '酒館助手狀態欄 · 等待同步')
+        : (meta.statusBar ? meta.statusBar.name + (meta.statusBar.enabled ? ' · 已啟用' : ' · 已停用') : '尚未偵測到酒館助手狀態欄');
     let model = context.mainApi || 'Unknown';
     try {
         model = context.getChatCompletionModel?.() || model;
@@ -1395,8 +1515,10 @@ function refreshAll() {
     renderEntityList();
     renderHeader();
     renderMessages();
+    renderStatusBarArea();
     renderComposer();
     refreshDetail();
+    queueTavernHelperStatusBarSync();
 }
 
 async function selectEntity(type, id) {
@@ -2637,15 +2759,22 @@ function openStatusBarManager() {
         return;
     }
     const statusBar = getChatMeta(context).statusBar;
+    const tavernHelperStatusBar = getTavernHelperStatusBar();
+    const tavernHelperSummary = tavernHelperStatusBar ? [
+        '<article class="mol-statusbar-manager-card tavern-helper"><div><strong>酒館助手渲染狀態欄</strong><small>已偵測到目前角色卡綁定的《大晏》狀態欄</small></div><span>' + (isTavernHelperStatusBarBridged() ? '已同步顯示' : '等待同步') + '</span></article>',
+        '<p class="mol-dialog-hint">墨藍藝廊會直接承接酒館助手已啟用的渲染節點，按鈕、狀態更新與聊天變數仍由原角色腳本管理。</p>',
+        '<div class="mol-panel-toolbar"><button class="primary" data-action="sync-tavern-helper-statusbar"><i class="fa-solid fa-arrows-rotate"></i> 重新偵測並顯示</button></div>',
+    ].join('') : '';
     const summary = statusBar ? [
         '<article class="mol-statusbar-manager-card"><div><strong>' + escapeHtml(statusBar.name) + '</strong><small>' + statusBar.config.fields.length + ' 個欄位 · ' + statusBar.config.affinities.length + ' 名角色 · ' + statusBar.config.resources.length + ' 項資源</small></div><span>' + (statusBar.enabled ? '已啟用' : '已停用') + '</span></article>',
         '<p class="mol-dialog-hint">' + escapeHtml(statusBar.sourceInfo || '狀態與資源會依目前聊天室分別保存。') + '</p>',
         '<div class="mol-panel-toolbar"><button data-action="toggle-statusbar">' + (statusBar.enabled ? '停用狀態欄' : '啟用狀態欄') + '</button><button data-action="reset-statusbar">重置數值</button><button data-action="export-statusbar-state">匯出目前狀態</button><button data-action="remove-statusbar" class="danger">移除狀態欄</button></div>',
-    ].join('') : '<div class="mol-statusbar-import-empty"><i class="fa-solid fa-file-code"></i><strong>尚未匯入互動狀態欄</strong><p>可讀取酒館助手角色腳本 JSON，安全解析 CONFIG、顯示模式、好感度、資源、備忘錄與按鈕；不會執行檔案中的任意 JavaScript。</p></div>';
+    ].join('') : (tavernHelperStatusBar ? '' : '<div class="mol-statusbar-import-empty"><i class="fa-solid fa-file-code"></i><strong>尚未偵測到狀態欄</strong><p>請先在酒館助手將角色腳本綁定至目前角色卡並啟用渲染；墨藍藝廊會自動把已渲染的狀態欄顯示在輸入框上方。也可使用下方 JSON 匯入器建立獨立狀態欄。</p></div>');
     layer.innerHTML = [
         '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">INTERACTIVE STATUS BAR</p><h3>互動狀態欄</h3>',
+        tavernHelperSummary,
         summary,
-        '<div class="mol-panel-toolbar mol-statusbar-import-actions"><button class="primary" data-action="import-statusbar"><i class="fa-solid fa-file-import"></i> ' + (statusBar ? '重新匯入／替換 JSON' : '匯入酒館助手 JSON') + '</button></div>',
+        '<div class="mol-panel-toolbar mol-statusbar-import-actions"><button data-action="import-statusbar"><i class="fa-solid fa-file-import"></i> ' + (statusBar ? '重新匯入／替換 JSON' : '另行匯入 JSON（可選）') + '</button></div>',
         '<input id="mol-statusbar-import" type="file" accept=".json,application/json" hidden></div>',
     ].join('');
     layer.hidden = false;
@@ -3126,6 +3255,12 @@ async function handleRootClick(event) {
         case 'usage-stats': openUsagePanel(); break;
         case 'memory-summary': openMemorySummaryPanel(); break;
         case 'statusbar-manager': openStatusBarManager(); break;
+        case 'sync-tavern-helper-statusbar': {
+            const synced = syncTavernHelperStatusBar();
+            notify(synced ? '酒館助手狀態欄已顯示於墨藍藝廊。' : '尚未偵測到已啟用渲染的酒館助手狀態欄。', synced ? 'info' : 'warning');
+            openStatusBarManager();
+            break;
+        }
         case 'import-statusbar': document.getElementById('mol-statusbar-import')?.click(); break;
         case 'statusbar-mode':
             await updateStatusBarState((state, statusBar) => {
@@ -3488,6 +3623,7 @@ function handleFileChange(event) {
 }
 
 function initialize() {
+    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜狀態欄位置：輸入框上方');
     createRoot();
     installViewportSync();
     installLauncher();
@@ -3527,6 +3663,7 @@ export function onDisable() {
     }
     document.removeEventListener('keydown', handleGlobalKeydown);
     document.removeEventListener('change', handleFileChange, true);
+    stopTavernHelperStatusBarBridge();
     removeViewportSync();
     document.getElementById(ROOT_ID)?.remove();
     document.getElementById(LAUNCHER_ID)?.remove();

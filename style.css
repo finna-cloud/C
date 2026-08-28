@@ -447,7 +447,7 @@ body.mol-gallery-open {
     min-width: 0;
     min-height: 0;
     overflow: hidden;
-    grid-template-rows: 70px 44px 1fr auto;
+    grid-template-rows: 70px 44px minmax(0, 1fr) auto auto;
     background: var(--mol-light);
 }
 
@@ -565,6 +565,36 @@ body.mol-gallery-open {
     -webkit-overflow-scrolling: touch;
     padding: 10px clamp(28px, 6vw, 88px) 36px;
     scroll-behavior: smooth;
+}
+
+.mol-tavern-helper-statusbar-slot {
+    z-index: 3;
+    min-width: 0;
+    max-height: min(42vh, 480px);
+    overflow: auto;
+    padding: 4px clamp(22px, 5vw, 68px) 8px;
+    background: linear-gradient(transparent, var(--mol-light) 18%);
+    scrollbar-width: thin;
+}
+
+.mol-tavern-helper-statusbar-slot[hidden],
+.mol-tavern-helper-statusbar-slot:empty {
+    display: none;
+}
+
+.mol-tavern-helper-statusbar-slot > #dayan-statusbar-host-v2 {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    max-width: 760px !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    transform: none !important;
+    z-index: auto !important;
+}
+
+.mol-tavern-helper-statusbar-slot > .mol-statusbar {
+    margin: 0 auto !important;
 }
 
 .mol-statusbar {
@@ -2425,7 +2455,7 @@ body.mol-gallery-open {
         height: 100dvh;
         min-height: 0;
         grid-column: 1;
-        grid-template-rows: 64px 38px 1fr auto;
+        grid-template-rows: 64px 38px minmax(0, 1fr) auto auto;
     }
 
     .mol-header {
@@ -2473,6 +2503,11 @@ body.mol-gallery-open {
 
     .mol-composer-wrap {
         padding: 0 17px 14px;
+    }
+
+    .mol-tavern-helper-statusbar-slot {
+        max-height: 40vh;
+        padding: 3px 12px 7px;
     }
 
     .mol-composer {
