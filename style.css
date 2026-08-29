@@ -3068,18 +3068,25 @@ body.mol-gallery-open {
     background: var(--mol-paper);
 }
 
-.mol-upload-button,
-.mol-background-actions button {
+.mol-background-actions > .mol-upload-button,
+.mol-background-actions > button {
     display: inline-flex;
-    min-height: 38px;
+    width: auto;
+    height: 40px;
+    min-height: 40px;
     align-items: center;
     justify-content: center;
-    padding: 8px 12px;
+    margin: 0;
+    padding: 0 14px;
     border: 1px solid var(--mol-line);
     border-radius: var(--mol-control-radius);
     color: var(--mol-ink);
     background: var(--mol-light);
     cursor: pointer;
+    font-size: calc(11px * var(--mol-ui-scale));
+    font-weight: 400;
+    line-height: 1;
+    white-space: nowrap;
 }
 
 .mol-upload-button input {
@@ -3091,7 +3098,12 @@ body.mol-gallery-open {
 }
 
 .mol-background-actions small {
+    display: flex;
+    min-height: 40px;
+    align-items: center;
     color: var(--mol-muted);
+    font-size: calc(11px * var(--mol-ui-scale));
+    line-height: 1.35;
 }
 
 @media (max-width: 700px) {
