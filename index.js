@@ -1,5 +1,5 @@
 const MODULE_NAME = 'molan_gallery';
-const BUILD_VERSION = '1.12.1-statusbar-inner-scroll';
+const BUILD_VERSION = '1.13.0-rounded-typography';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
@@ -24,11 +24,24 @@ const DEFAULT_MEMORY = Object.freeze({
 const MAX_STATUSBAR_FILE_BYTES = 2 * 1024 * 1024;
 const TAVERN_HELPER_STATUSBAR_SELECTOR = '#dayan-statusbar-host-v2';
 const TAVERN_HELPER_STATUSBAR_SLOT_ID = 'mol-tavern-helper-statusbar-slot';
+const CHINESE_FONT_OPTIONS = Object.freeze({
+    sans: { label: '現代黑體', stack: '"PingFang TC", "Microsoft JhengHei", "Noto Sans TC", sans-serif' },
+    serif: { label: '典雅明體', stack: '"Noto Serif TC", "PMingLiU", "Songti TC", serif' },
+    kai: { label: '傳統楷體', stack: '"BiauKai", "DFKai-SB", "Kaiti TC", "Noto Serif TC", serif' },
+});
+const ENGLISH_FONT_OPTIONS = Object.freeze({
+    modern: { label: 'Modern Sans', stack: 'Inter, "Segoe UI", Arial' },
+    serif: { label: 'Classic Serif', stack: 'Georgia, "Times New Roman"' },
+    humanist: { label: 'Humanist Sans', stack: '"Trebuchet MS", "Segoe UI"' },
+    mono: { label: 'Monospace', stack: 'Consolas, "Courier New"' },
+});
 const DEFAULT_SETTINGS = Object.freeze({
     autoOpen: false,
     compactMessages: false,
     interfaceFontSize: 14,
     messageFontSize: 14,
+    chineseFont: 'sans',
+    englishFont: 'modern',
     usageTotals: structuredClone(EMPTY_USAGE),
     quickReplies: [],
 });
@@ -90,6 +103,12 @@ function getSettings() {
     context.extensionSettings[MODULE_NAME].quickReplies = normalizeQuickReplies(context.extensionSettings[MODULE_NAME].quickReplies);
     context.extensionSettings[MODULE_NAME].interfaceFontSize = clampFontSize(context.extensionSettings[MODULE_NAME].interfaceFontSize, 11, 22, DEFAULT_SETTINGS.interfaceFontSize);
     context.extensionSettings[MODULE_NAME].messageFontSize = clampFontSize(context.extensionSettings[MODULE_NAME].messageFontSize, 12, 32, DEFAULT_SETTINGS.messageFontSize);
+    context.extensionSettings[MODULE_NAME].chineseFont = Object.hasOwn(CHINESE_FONT_OPTIONS, context.extensionSettings[MODULE_NAME].chineseFont)
+        ? context.extensionSettings[MODULE_NAME].chineseFont
+        : DEFAULT_SETTINGS.chineseFont;
+    context.extensionSettings[MODULE_NAME].englishFont = Object.hasOwn(ENGLISH_FONT_OPTIONS, context.extensionSettings[MODULE_NAME].englishFont)
+        ? context.extensionSettings[MODULE_NAME].englishFont
+        : DEFAULT_SETTINGS.englishFont;
     return context.extensionSettings[MODULE_NAME];
 }
 
@@ -107,6 +126,10 @@ function clampFontSize(value, min, max, fallback) {
     return Math.max(min, Math.min(max, Number.isFinite(size) ? Math.round(size) : fallback));
 }
 
+function renderFontOptions(options, selected) {
+    return Object.entries(options).map(([value, option]) => '<option value="' + value + '"' + (value === selected ? ' selected' : '') + '>' + option.label + '</option>').join('');
+}
+
 function applyTypographySettings() {
     const root = document.getElementById(ROOT_ID);
     if (!root) return;
@@ -114,6 +137,8 @@ function applyTypographySettings() {
     const scale = settings.interfaceFontSize / DEFAULT_SETTINGS.interfaceFontSize;
     root.style.setProperty('--mol-ui-scale', String(scale));
     root.style.setProperty('--mol-chat-font-size', settings.messageFontSize + 'px');
+    root.style.setProperty('--mol-font-zh', CHINESE_FONT_OPTIONS[settings.chineseFont].stack);
+    root.style.setProperty('--mol-font-en', ENGLISH_FONT_OPTIONS[settings.englishFont].stack);
     root.style.setProperty('--mol-dialog-width', Math.round(460 * scale) + 'px');
     root.style.setProperty('--mol-wide-dialog-width', Math.round(860 * scale) + 'px');
     root.style.setProperty('--mol-dialog-padding', Math.round(28 * scale) + 'px');
@@ -1194,6 +1219,8 @@ function installSettings() {
         '<label class="checkbox_label"><input id="mol-compact-messages" type="checkbox"><span>緊湊訊息間距</span></label>',
         '<label>介面字體 <output id="mol-interface-font-output"></output><input id="mol-interface-font" type="range" min="11" max="22" step="1"></label>',
         '<label>聊天室訊息字體 <output id="mol-message-font-output"></output><input id="mol-message-font" type="range" min="12" max="32" step="1"></label>',
+        '<label>中文字體<select id="mol-chinese-font">' + renderFontOptions(CHINESE_FONT_OPTIONS, getSettings().chineseFont) + '</select></label>',
+        '<label>英文字體<select id="mol-english-font">' + renderFontOptions(ENGLISH_FONT_OPTIONS, getSettings().englishFont) + '</select></label>',
         '<button id="mol-open-settings" class="menu_button">開啟墨藍藝廊</button>',
         '<small>快捷鍵：Ctrl/Cmd + Shift + M</small>',
         '</div></div>',
@@ -1206,6 +1233,8 @@ function installSettings() {
     const messageFont = block.querySelector('#mol-message-font');
     const interfaceOutput = block.querySelector('#mol-interface-font-output');
     const messageOutput = block.querySelector('#mol-message-font-output');
+    const chineseFont = block.querySelector('#mol-chinese-font');
+    const englishFont = block.querySelector('#mol-english-font');
     interfaceFont.value = String(settings.interfaceFontSize);
     messageFont.value = String(settings.messageFontSize);
     interfaceOutput.value = settings.interfaceFontSize + ' px';
@@ -1228,6 +1257,16 @@ function installSettings() {
     messageFont.addEventListener('input', (event) => {
         settings.messageFontSize = clampFontSize(event.currentTarget.value, 12, 32, DEFAULT_SETTINGS.messageFontSize);
         messageOutput.value = settings.messageFontSize + ' px';
+        applyTypographySettings();
+        getContext().saveSettingsDebounced();
+    });
+    chineseFont.addEventListener('change', (event) => {
+        settings.chineseFont = Object.hasOwn(CHINESE_FONT_OPTIONS, event.currentTarget.value) ? event.currentTarget.value : DEFAULT_SETTINGS.chineseFont;
+        applyTypographySettings();
+        getContext().saveSettingsDebounced();
+    });
+    englishFont.addEventListener('change', (event) => {
+        settings.englishFont = Object.hasOwn(ENGLISH_FONT_OPTIONS, event.currentTarget.value) ? event.currentTarget.value : DEFAULT_SETTINGS.englishFont;
         applyTypographySettings();
         getContext().saveSettingsDebounced();
     });
@@ -3107,6 +3146,8 @@ function openInternalPanel(kind) {
             '<label><span><strong>緊湊訊息間距</strong><small>在同一畫面顯示更多訊息</small></span><input name="compactMessages" type="checkbox"' + (settings.compactMessages ? ' checked' : '') + '></label>',
             '<label class="mol-range-setting"><span><strong>介面字體大小</strong><small>調整按鈕、選單與標題文字</small></span><span><input name="interfaceFontSize" type="range" min="11" max="22" step="1" value="' + settings.interfaceFontSize + '"><output>' + settings.interfaceFontSize + ' px</output></span></label>',
             '<label class="mol-range-setting"><span><strong>聊天室訊息字體</strong><small>只調整對話正文，不影響介面</small></span><span><input name="messageFontSize" type="range" min="12" max="32" step="1" value="' + settings.messageFontSize + '"><output>' + settings.messageFontSize + ' px</output></span></label>',
+            '<label class="mol-font-select-setting"><span><strong>中文字體</strong><small>套用於中文介面與對話內容</small></span><select name="chineseFont">' + renderFontOptions(CHINESE_FONT_OPTIONS, settings.chineseFont) + '</select></label>',
+            '<label class="mol-font-select-setting"><span><strong>英文字體</strong><small>套用於英文、數字與標點</small></span><select name="englishFont">' + renderFontOptions(ENGLISH_FONT_OPTIONS, settings.englishFont) + '</select></label>',
             '</div>',
             '<p class="mol-dialog-hint">快捷鍵：Ctrl/Cmd + Shift + M</p>',
             '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div>',
@@ -3125,6 +3166,8 @@ function openInternalPanel(kind) {
         const compact = layer.querySelector('input[name="compactMessages"]');
         const interfaceFont = layer.querySelector('input[name="interfaceFontSize"]');
         const messageFont = layer.querySelector('input[name="messageFontSize"]');
+        const chineseFont = layer.querySelector('select[name="chineseFont"]');
+        const englishFont = layer.querySelector('select[name="englishFont"]');
         const save = () => context.saveSettingsDebounced();
         const onAutoOpen = () => { settings.autoOpen = autoOpen.checked; save(); };
         const onCompact = () => {
@@ -3144,15 +3187,29 @@ function openInternalPanel(kind) {
             applyTypographySettings();
             save();
         };
+        const onChineseFont = () => {
+            settings.chineseFont = Object.hasOwn(CHINESE_FONT_OPTIONS, chineseFont.value) ? chineseFont.value : DEFAULT_SETTINGS.chineseFont;
+            applyTypographySettings();
+            save();
+        };
+        const onEnglishFont = () => {
+            settings.englishFont = Object.hasOwn(ENGLISH_FONT_OPTIONS, englishFont.value) ? englishFont.value : DEFAULT_SETTINGS.englishFont;
+            applyTypographySettings();
+            save();
+        };
         autoOpen.addEventListener('change', onAutoOpen);
         compact.addEventListener('change', onCompact);
         interfaceFont.addEventListener('input', onInterfaceFont);
         messageFont.addEventListener('input', onMessageFont);
+        chineseFont.addEventListener('change', onChineseFont);
+        englishFont.addEventListener('change', onEnglishFont);
         activeDialogCleanup = () => {
             autoOpen.removeEventListener('change', onAutoOpen);
             compact.removeEventListener('change', onCompact);
             interfaceFont.removeEventListener('input', onInterfaceFont);
             messageFont.removeEventListener('input', onMessageFont);
+            chineseFont.removeEventListener('change', onChineseFont);
+            englishFont.removeEventListener('change', onEnglishFont);
         };
     }
 }
@@ -3757,7 +3814,7 @@ function handleFileChange(event) {
 }
 
 function initialize() {
-    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜狀態欄位置：輸入框上方');
+    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜圓角介面與中英文字體設定已啟用');
     createRoot();
     installViewportSync();
     installLauncher();

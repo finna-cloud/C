@@ -2819,3 +2819,149 @@ body.mol-gallery-open {
 #molan-gallery-root.compact-messages .mol-message-text {
     font-size: var(--mol-chat-font-size);
 }
+
+/* v1.13.0 — rounded interactive surfaces and independent CJK/Latin typography */
+#molan-gallery-root {
+    --mol-font-en: Inter, "Segoe UI", Arial;
+    --mol-font-zh: "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+    --mol-control-radius: 12px;
+    --mol-card-radius: 16px;
+    font-family: var(--mol-font-en), var(--mol-font-zh), sans-serif;
+}
+
+#molan-gallery-root :where(div, section, article, nav, header, footer, button, input, textarea, select, option, p, span, strong, small, h1, h2, h3, h4, label, output, a, em) {
+    font-family: var(--mol-font-en), var(--mol-font-zh), sans-serif !important;
+}
+
+#molan-gallery-root :where(button, input:not([type="checkbox"]):not([type="range"]):not([type="color"]), textarea, select, [role="button"]) {
+    border-radius: var(--mol-control-radius);
+}
+
+#molan-gallery-root button {
+    align-items: center;
+    justify-content: center;
+    line-height: 1.25;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.mol-dialog-actions button,
+.mol-panel-toolbar button,
+.mol-composer-shortcuts button,
+.mol-chat-card-actions button,
+.mol-character-card-actions button,
+.mol-world-books article button,
+.mol-world-entries article button,
+.mol-player-card > button,
+.mol-preset-card > button,
+.mol-statusbar-resource > button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.mol-message {
+    padding: 16px 18px;
+    overflow: hidden;
+    border: 1px solid rgba(41, 39, 34, .14);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, .28);
+}
+
+.mol-message.user {
+    border: 1px solid rgba(32, 75, 217, .22);
+    border-left: 2px solid var(--mol-blue);
+}
+
+.mol-message.system {
+    border-radius: 14px;
+}
+
+.mol-message-tools button {
+    min-height: 28px;
+    padding: 4px 9px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+}
+
+.mol-message-tools button:hover,
+.mol-message-tools button:focus-visible {
+    border-color: var(--mol-line);
+    background: rgba(255, 255, 255, .55);
+}
+
+.mol-composer {
+    overflow: hidden;
+    border-radius: 18px;
+}
+
+.mol-composer textarea,
+.mol-search,
+.mol-quick-reply-picker select {
+    border-radius: var(--mol-control-radius);
+}
+
+.mol-dialog,
+.mol-chat-card,
+.mol-create-group-button,
+.mol-context-list > button,
+.mol-model-note,
+.mol-preset-entry,
+.mol-greeting-option,
+.mol-group-member-card,
+.mol-group-member-list article,
+.mol-group-member-list.selectable button,
+.mol-player-card,
+.mol-preset-card,
+.mol-world-books article,
+.mol-world-entries article,
+.mol-character-card,
+.mol-quick-reply-list article,
+.mol-manage-list article,
+.mol-settings-list label {
+    border-radius: var(--mol-card-radius);
+}
+
+.mol-chat-card,
+.mol-character-card,
+.mol-player-card,
+.mol-preset-card {
+    overflow: hidden;
+}
+
+.mol-context-list {
+    gap: 8px;
+    border-top: 0;
+}
+
+.mol-context-list > button {
+    padding: 12px;
+    border: 1px solid var(--mol-line);
+}
+
+.mol-settings-list .mol-font-select-setting {
+    grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+}
+
+.mol-settings-list .mol-font-select-setting select {
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 34px 8px 12px;
+    border: 1px solid var(--mol-line);
+    color: var(--mol-ink);
+    background: var(--mol-light);
+}
+
+#molan-gallery-settings select {
+    width: 100%;
+    margin-top: 6px;
+    padding: 7px 10px;
+    border-radius: 10px;
+}
+
+@media (max-width: 700px) {
+    .mol-settings-list .mol-font-select-setting {
+        grid-template-columns: 1fr;
+    }
+}
