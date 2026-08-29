@@ -1,12 +1,16 @@
 :root {
-    --mol-paper: #f3f0e8;
+    --mol-paper: #f2efe6;
     --mol-light: #faf8f2;
-    --mol-ink: #171715;
-    --mol-muted: #78766f;
-    --mol-line: #d9d4c8;
-    --mol-blue: #204bd9;
-    --mol-blue-soft: #e3e8fa;
+    --mol-ink: #151513;
+    --mol-muted: #6f6d66;
+    --mol-line: #d6d0c2;
+    --mol-blue: #1f49d4;
+    --mol-blue-deep: #1637a8;
+    --mol-blue-soft: #e4e9fb;
     --mol-danger: #a63d2d;
+    --mol-glow: rgba(31, 73, 212, .14);
+    --mol-shadow-soft: 0 10px 28px rgba(21, 21, 19, .06);
+    --mol-shadow-lift: 0 16px 40px rgba(21, 21, 19, .1);
 }
 
 body.mol-gallery-open {
@@ -41,9 +45,15 @@ body.mol-gallery-open {
     min-height: 0;
     overflow: hidden;
     color: var(--mol-ink);
-    background: var(--mol-paper);
+    background:
+        radial-gradient(1200px 480px at 12% -8%, rgba(31, 73, 212, .07), transparent 55%),
+        radial-gradient(900px 420px at 88% 108%, rgba(21, 21, 19, .05), transparent 50%),
+        linear-gradient(180deg, #f6f3eb 0%, var(--mol-paper) 42%, #efebe1 100%);
     font-family: Arial, "PingFang TC", "Noto Sans TC", sans-serif;
     font-size: calc(14px * var(--mol-ui-scale));
+    letter-spacing: .01em;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
 
 #molan-gallery-root[hidden] {
@@ -1335,7 +1345,16 @@ body.mol-gallery-open {
     height: 29px;
     place-items: center;
     border: 1px solid var(--mol-line);
+    border-radius: 10px;
     color: var(--mol-blue);
+    background: rgba(255, 255, 255, .55);
+    transition: border-color .2s ease, background .2s ease, color .2s ease;
+}
+
+.mol-context-list > button:hover .mol-context-icon {
+    border-color: rgba(31, 73, 212, .35);
+    color: var(--mol-blue-deep);
+    background: var(--mol-blue-soft);
 }
 
 .mol-context-list strong,
@@ -1382,6 +1401,7 @@ body.mol-gallery-open {
 
 .focus-mode {
     grid-template-columns: 72px 0 minmax(430px, 1fr) 0 !important;
+    transition: grid-template-columns .35s cubic-bezier(.22, 1, .36, 1);
 }
 
 .focus-mode .mol-chat-list,
@@ -1391,6 +1411,7 @@ body.mol-gallery-open {
     border: 0;
     opacity: 0;
     pointer-events: none;
+    transition: opacity .25s ease;
 }
 
 .mol-dialog-layer {
@@ -3113,5 +3134,588 @@ body.mol-gallery-open {
 
     .mol-background-actions small {
         grid-column: 1 / -1;
+    }
+}
+
+/* v1.14.3 — deep gallery UI polish: depth, motion, focus, scrollbars */
+@keyframes mol-fade-rise {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes mol-status-pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(31, 73, 212, .45); }
+    50% { opacity: .72; box-shadow: 0 0 0 5px rgba(31, 73, 212, 0); }
+}
+
+@keyframes mol-composer-glow {
+    from { box-shadow: 7px 7px 0 var(--mol-blue), 0 0 0 0 var(--mol-glow); }
+    to { box-shadow: 7px 7px 0 var(--mol-blue), 0 0 0 6px var(--mol-glow); }
+}
+
+#molan-gallery-root:not([hidden]) {
+    animation: mol-fade-rise .38s cubic-bezier(.22, 1, .36, 1);
+}
+
+#molan-gallery-root ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+}
+
+#molan-gallery-root ::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#molan-gallery-root ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: rgba(21, 21, 19, .18);
+    background-clip: padding-box;
+}
+
+#molan-gallery-root ::-webkit-scrollbar-thumb:hover {
+    background: rgba(31, 73, 212, .45);
+    background-clip: padding-box;
+}
+
+#molan-gallery-root :where(button, a, input, textarea, select):focus-visible {
+    outline: 2px solid var(--mol-blue);
+    outline-offset: 2px;
+}
+
+.mol-rail {
+    position: relative;
+    background:
+        linear-gradient(180deg, #1c1c19 0%, var(--mol-ink) 48%, #10100e 100%);
+    box-shadow: inset -1px 0 0 rgba(255, 255, 255, .04);
+}
+
+.mol-rail::after {
+    position: absolute;
+    top: 72px;
+    bottom: 88px;
+    right: 0;
+    width: 1px;
+    pointer-events: none;
+    background: linear-gradient(180deg, transparent, rgba(31, 73, 212, .35), transparent);
+    content: "";
+}
+
+.mol-brand {
+    transition: transform .25s ease;
+}
+
+.mol-brand:hover {
+    transform: scale(1.06) rotate(-2deg);
+}
+
+.mol-brand::after {
+    border-color: #6d8ef0;
+    box-shadow: 0 0 0 4px rgba(31, 73, 212, .18);
+}
+
+.mol-rail-button {
+    position: relative;
+    border-radius: 14px !important;
+    transition: color .2s ease, background .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+
+.mol-rail-button:hover {
+    color: #f4f2ea !important;
+    background: rgba(255, 255, 255, .08);
+    transform: translateY(-1px);
+}
+
+.mol-rail-button.active {
+    color: white !important;
+    background: linear-gradient(145deg, var(--mol-blue) 0%, var(--mol-blue-deep) 100%);
+    box-shadow: 0 8px 18px rgba(31, 73, 212, .35);
+}
+
+.mol-rail-button.active::after {
+    position: absolute;
+    left: -15px;
+    width: 3px;
+    height: 16px;
+    border-radius: 999px;
+    background: #9db3ff;
+    content: "";
+}
+
+.mol-profile-dot {
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+
+.mol-profile-dot:hover {
+    border-color: var(--mol-blue);
+    transform: scale(1.05);
+    box-shadow: 0 0 0 3px rgba(31, 73, 212, .25);
+}
+
+.mol-rail-settings {
+    border-radius: 10px !important;
+    transition: color .2s ease, background .2s ease;
+}
+
+.mol-rail-settings:hover {
+    background: rgba(255, 255, 255, .08);
+}
+
+.mol-chat-list {
+    background:
+        linear-gradient(180deg, rgba(250, 248, 242, .55), transparent 120px),
+        var(--mol-paper);
+    backdrop-filter: blur(2px);
+}
+
+.mol-list-heading h1 {
+    letter-spacing: -.02em;
+}
+
+.mol-icon-button {
+    transition: border-color .2s ease, background .2s ease, color .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+
+.mol-icon-button:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--mol-shadow-soft);
+}
+
+.mol-search {
+    height: 42px;
+    padding: 0 4px 2px;
+    border-bottom-color: rgba(21, 21, 19, .55);
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.mol-search:focus-within {
+    border-bottom-color: var(--mol-blue);
+    box-shadow: inset 0 -2px 0 var(--mol-blue);
+}
+
+.mol-filters button {
+    position: relative;
+    transition: color .2s ease;
+}
+
+.mol-filters button.active {
+    border-bottom: 0;
+    color: var(--mol-ink);
+}
+
+.mol-filters button.active::after {
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--mol-blue), #6d8ef0);
+    content: "";
+}
+
+.mol-create-group-button {
+    border-radius: 14px;
+    box-shadow: 0 8px 18px rgba(31, 73, 212, .08);
+    transition: transform .2s ease, box-shadow .2s ease, background .2s ease;
+}
+
+.mol-create-group-button:hover {
+    transform: translateY(-1px);
+    background: #dfe6fb;
+    box-shadow: 0 12px 24px rgba(31, 73, 212, .14);
+}
+
+.mol-entity-list {
+    padding: 4px 10px 16px;
+    scrollbar-gutter: stable;
+}
+
+.mol-chat-card {
+    margin-bottom: 6px;
+    border: 1px solid transparent;
+    border-bottom: 1px solid transparent;
+    border-radius: 16px;
+    transition: background .2s ease, border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+
+.mol-chat-card:hover {
+    border-color: rgba(21, 21, 19, .08);
+    background: rgba(255, 255, 255, .72);
+    transform: translateY(-1px);
+    box-shadow: var(--mol-shadow-soft);
+}
+
+.mol-chat-card.active {
+    border-color: rgba(31, 73, 212, .18);
+    background: linear-gradient(135deg, #fff 0%, var(--mol-light) 100%);
+    box-shadow: inset 3px 0 0 var(--mol-blue), var(--mol-shadow-soft);
+}
+
+.mol-avatar {
+    box-shadow: 0 6px 14px rgba(31, 73, 212, .18);
+}
+
+.mol-preview {
+    color: var(--mol-muted);
+}
+
+.mol-list-note {
+    border-top-color: rgba(21, 21, 19, .35);
+}
+
+.mol-empty {
+    margin: 18px 8px;
+    padding: 36px 20px;
+    border: 1px dashed var(--mol-line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, .35);
+}
+
+.mol-conversation {
+    box-shadow: inset 1px 0 0 rgba(255, 255, 255, .35);
+}
+
+.mol-conversation::before {
+    background-image:
+        radial-gradient(rgba(77, 75, 70, .55) .4px, transparent .4px);
+    background-size: 5px 5px;
+    opacity: .12;
+    mask-image: linear-gradient(180deg, rgba(0, 0, 0, .55), transparent 92%);
+}
+
+.mol-header {
+    border-bottom-color: rgba(214, 208, 194, .75);
+    background: rgba(250, 248, 242, .82);
+    backdrop-filter: blur(14px) saturate(1.1);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .55);
+}
+
+.mol-text-button {
+    transition: border-color .2s ease, color .2s ease, background .2s ease, transform .2s ease;
+}
+
+.mol-text-button:hover,
+.mol-text-button.active {
+    background: var(--mol-blue-soft);
+    transform: translateY(-1px);
+}
+
+.mol-chapter {
+    letter-spacing: .16em;
+}
+
+.mol-messages {
+    padding-top: 14px;
+    scroll-padding-bottom: 24px;
+}
+
+.mol-scene {
+    padding: 8px 12px 4px;
+    animation: mol-fade-rise .45s ease both;
+}
+
+.mol-scene strong {
+    letter-spacing: -.01em;
+}
+
+.mol-message {
+    border-color: rgba(41, 39, 34, .1);
+    box-shadow: 0 8px 22px rgba(21, 21, 19, .035);
+    backdrop-filter: blur(6px);
+    transition: box-shadow .2s ease, transform .2s ease, border-color .2s ease;
+}
+
+.mol-message:last-of-type {
+    animation: mol-fade-rise .34s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.mol-message:hover {
+    border-color: rgba(41, 39, 34, .16);
+    box-shadow: var(--mol-shadow-soft);
+}
+
+.mol-message.user {
+    border-left-width: 3px;
+    box-shadow: 0 10px 26px rgba(31, 73, 212, .08);
+}
+
+.mol-message.character {
+    border-top-left-radius: 8px;
+}
+
+.mol-message.user {
+    border-top-right-radius: 8px;
+}
+
+.mol-message-meta strong {
+    letter-spacing: .02em;
+}
+
+.mol-message-text {
+    font-family: Georgia, "Noto Serif TC", "Songti TC", serif !important;
+}
+
+.mol-dialogue-text {
+    font-weight: 500;
+}
+
+.mol-message-tools {
+    gap: 8px;
+}
+
+.mol-message-tools button {
+    letter-spacing: .04em;
+    transition: color .2s ease, background .2s ease, border-color .2s ease;
+}
+
+.mol-composer-wrap {
+    background: linear-gradient(180deg, transparent 0%, rgba(250, 248, 242, .55) 28%, var(--mol-chat-background-color, var(--mol-light)) 100%);
+}
+
+.mol-format-shortcuts button,
+.mol-quick-reply-manage,
+.mol-quick-reply-picker select {
+    border-radius: 999px !important;
+    transition: border-color .2s ease, color .2s ease, background .2s ease, transform .2s ease;
+}
+
+.mol-format-shortcuts button:hover,
+.mol-quick-reply-manage:hover {
+    transform: translateY(-1px);
+}
+
+.mol-composer {
+    border-width: 1.5px;
+    background: rgba(250, 248, 242, .96);
+    box-shadow: 7px 7px 0 var(--mol-blue), 0 12px 28px rgba(21, 21, 19, .05);
+    transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.mol-composer:focus-within {
+    border-color: var(--mol-blue);
+    transform: translateY(-1px);
+    animation: mol-composer-glow .7s ease;
+    box-shadow: 7px 7px 0 var(--mol-blue), 0 0 0 5px var(--mol-glow), 0 16px 34px rgba(31, 73, 212, .1);
+}
+
+.mol-send-button {
+    transition: background .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+
+.mol-send-button:hover {
+    transform: scale(1.05);
+    box-shadow: 0 8px 16px rgba(31, 73, 212, .28);
+}
+
+.mol-add-button {
+    border-radius: 50% !important;
+    transition: color .2s ease, background .2s ease;
+}
+
+.mol-add-button:hover {
+    color: var(--mol-blue);
+    background: var(--mol-blue-soft);
+}
+
+.mol-detail {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, .35), transparent 140px),
+        var(--mol-paper);
+    scrollbar-gutter: stable;
+}
+
+.mol-art-card {
+    overflow: hidden;
+    border-radius: 18px;
+    box-shadow: var(--mol-shadow-soft);
+    transition: transform .25s ease, box-shadow .25s ease;
+}
+
+.mol-art-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--mol-shadow-lift);
+}
+
+.mol-portrait {
+    border-radius: 12px;
+}
+
+.mol-art-index {
+    border: 1px solid var(--mol-line);
+    border-radius: 8px;
+    backdrop-filter: blur(6px);
+    background: rgba(250, 248, 242, .88);
+}
+
+.mol-profile-heading h2 {
+    letter-spacing: -.02em;
+}
+
+.mol-status:not(.inactive)::before {
+    animation: mol-status-pulse 2.2s ease infinite;
+}
+
+.mol-stat-bar {
+    overflow: hidden;
+    border-radius: 999px;
+    height: 4px;
+}
+
+.mol-stat-bar i {
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--mol-blue), #6d8ef0);
+    transition: width .35s cubic-bezier(.22, 1, .36, 1);
+}
+
+.mol-context-list > button {
+    background: rgba(255, 255, 255, .42);
+    transition: border-color .2s ease, background .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+
+.mol-context-list > button:hover {
+    border-color: rgba(31, 73, 212, .28);
+    background: #fff;
+    transform: translateY(-1px);
+    box-shadow: var(--mol-shadow-soft);
+}
+
+.mol-model-note {
+    margin-top: 14px;
+    border: 1px solid var(--mol-line);
+    border-radius: 16px;
+    background: linear-gradient(145deg, #fff, var(--mol-light));
+    box-shadow: var(--mol-shadow-soft);
+    transition: border-color .2s ease, transform .2s ease;
+}
+
+.mol-model-note:hover {
+    border-color: rgba(31, 73, 212, .35);
+    transform: translateY(-1px);
+}
+
+.mol-dialog-layer {
+    background: rgba(18, 18, 16, .42);
+    backdrop-filter: blur(8px) saturate(1.05);
+}
+
+.mol-dialog {
+    border: 1px solid rgba(21, 21, 19, .12);
+    border-radius: 22px;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, .72), transparent 48px),
+        var(--mol-light);
+    box-shadow:
+        var(--mol-dialog-shadow) var(--mol-dialog-shadow) 0 var(--mol-blue),
+        0 24px 60px rgba(21, 21, 19, .18);
+    animation: mol-fade-rise .28s cubic-bezier(.22, 1, .36, 1);
+}
+
+.mol-dialog h3 {
+    letter-spacing: -.02em;
+}
+
+.mol-dialog input[type="text"],
+.mol-dialog textarea,
+.mol-dialog select {
+    border-color: rgba(214, 208, 194, .95);
+    background: rgba(255, 255, 255, .72);
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.mol-dialog input:focus,
+.mol-dialog textarea:focus,
+.mol-dialog select:focus {
+    border-color: var(--mol-blue);
+    box-shadow: 0 0 0 3px var(--mol-glow);
+}
+
+.mol-dialog-actions button,
+.mol-panel-toolbar button {
+    min-height: 38px;
+    padding: 8px 14px;
+    border: 1px solid var(--mol-line);
+    transition: border-color .2s ease, background .2s ease, color .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+
+.mol-dialog-actions button:hover,
+.mol-panel-toolbar button:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--mol-shadow-soft);
+}
+
+.mol-dialog-actions button.primary,
+.mol-panel-toolbar button.primary {
+    border-color: var(--mol-ink);
+    color: #fff !important;
+    background: linear-gradient(145deg, #22221f, var(--mol-ink));
+}
+
+.mol-dialog-actions button.primary:hover,
+.mol-panel-toolbar button.primary:hover {
+    border-color: var(--mol-blue);
+    background: linear-gradient(145deg, var(--mol-blue), var(--mol-blue-deep));
+}
+
+.mol-dialog-close {
+    transition: color .2s ease, background .2s ease, transform .2s ease;
+}
+
+.mol-dialog-close:hover {
+    color: var(--mol-blue);
+    background: var(--mol-blue-soft);
+    transform: rotate(90deg);
+}
+
+.mol-tavern-helper-statusbar-slot > .mol-statusbar,
+.mol-statusbar {
+    border-radius: 18px;
+    box-shadow: 0 18px 42px rgba(0, 0, 0, .24), inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+
+@media (hover: none) {
+    .mol-message-tools {
+        opacity: .88;
+    }
+
+    .mol-message:hover {
+        transform: none;
+    }
+}
+
+@media (max-width: 780px) {
+    .mol-message {
+        border-radius: 16px;
+    }
+
+    .mol-composer {
+        box-shadow: 5px 5px 0 var(--mol-blue), 0 10px 22px rgba(21, 21, 19, .05);
+    }
+
+    .mol-composer:focus-within {
+        box-shadow: 5px 5px 0 var(--mol-blue), 0 0 0 4px var(--mol-glow);
+    }
+
+    .mol-chat-card:hover {
+        transform: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #molan-gallery-root:not([hidden]),
+    .mol-scene,
+    .mol-message,
+    .mol-dialog {
+        animation: none !important;
+    }
+
+    .mol-status:not(.inactive)::before {
+        animation: none !important;
     }
 }

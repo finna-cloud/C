@@ -1,5 +1,5 @@
 const MODULE_NAME = 'molan_gallery';
-const BUILD_VERSION = '1.14.2-perf-p0';
+const BUILD_VERSION = '1.14.3-ui-polish';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
@@ -4241,7 +4241,7 @@ function handleFileChange(event) {
 }
 
 function initialize() {
-    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜圓角介面與中英文字體設定已啟用');
+    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜介面美化與效能優化已啟用');
     createRoot();
     installViewportSync();
     installLauncher();
