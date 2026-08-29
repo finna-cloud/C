@@ -1,5 +1,5 @@
 const MODULE_NAME = 'molan_gallery';
-const BUILD_VERSION = '1.14.1-background-controls';
+const BUILD_VERSION = '1.15.0-usage-management';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
@@ -11,7 +11,7 @@ const GENERATION_ENDPOINTS = new Set([
     '/api/novelai/generate',
     '/api/horde/generate-text',
 ]);
-const EMPTY_USAGE = Object.freeze({ input: 0, output: 0, total: 0, userMessages: 0, last: null });
+const EMPTY_USAGE = Object.freeze({ input: 0, output: 0, total: 0, requests: 0, userMessages: 0, last: null });
 const DEFAULT_MEMORY = Object.freeze({
     enabled: false,
     everyMessages: 20,
@@ -358,6 +358,7 @@ function normalizeUsage(value) {
         input: number('input'),
         output: number('output'),
         total: number('total'),
+        requests: number('requests'),
         userMessages: number('userMessages'),
         last: source.last && typeof source.last === 'object' ? { ...source.last } : null,
     };
@@ -738,6 +739,8 @@ async function recordApiUsage(usage, requestType) {
         type: requestType || currentGeneration.type || 'normal',
         at: Date.now(),
     };
+    chatUsage.requests += 1;
+    globalUsage.requests += 1;
     if (available) {
         chatUsage.input += usage.input;
         chatUsage.output += usage.output;
@@ -3208,17 +3211,79 @@ function openUsagePanel() {
     layer.innerHTML = [
         '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">ACTUAL API USAGE</p><h3>Token 與訊息統計</h3>',
         '<p class="mol-dialog-hint">只統計 API 供應商實際回傳的 usage；供應商未回傳時不使用前端估算值替代。</p>',
-        '<div class="mol-usage-grid">',
+        '<div class="mol-usage-last">',
         '<div><span>本次輸入 TOKEN</span><strong>' + (actual ? numberText(last.input) : '未提供') + '</strong></div>',
         '<div><span>本次模型回覆 TOKEN</span><strong>' + (actual ? numberText(last.output) : '未提供') + '</strong></div>',
         '<div><span>本次合計</span><strong>' + (actual ? numberText(last.total) : '未提供') + '</strong></div>',
-        '<div><span>目前聊天累計</span><strong>' + numberText(current.total) + '</strong><small>輸入 ' + numberText(current.input) + ' · 回覆 ' + numberText(current.output) + '</small></div>',
-        '<div><span>全部累計</span><strong>' + numberText(all.total) + '</strong><small>輸入 ' + numberText(all.input) + ' · 回覆 ' + numberText(all.output) + '</small></div>',
-        '<div><span>真正送出訊息</span><strong>' + numberText(current.userMessages) + ' / ' + numberText(all.userMessages) + '</strong><small>目前聊天 / 全部累計</small></div>',
-        '</div><p class="mol-dialog-hint">Swipe、續寫與只重新生成模型回覆，不會增加使用者訊息次數。</p>',
+        '</div>',
+        '<div class="mol-usage-columns">',
+        usageColumnMarkup('目前聊天', current, 'current'),
+        usageColumnMarkup('全部累計', all, 'all'),
+        '</div><p class="mol-dialog-hint">Swipe、續寫與只重新生成模型回覆，不會增加玩家傳送訊息次數。重置只影響所選欄位。</p>',
         '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div></div>',
     ].join('');
     layer.hidden = false;
+}
+
+function usageColumnMarkup(title, usage, scope) {
+    return [
+        '<section class="mol-usage-column">',
+        '<header><div><span>' + (scope === 'current' ? 'CURRENT CHAT' : 'ALL CHATS') + '</span><h4>' + title + '</h4></div><strong>' + numberText(usage.total) + '</strong></header>',
+        '<dl>',
+        '<div><dt>輸入 TOKEN</dt><dd>' + numberText(usage.input) + '</dd></div>',
+        '<div><dt>回覆 TOKEN</dt><dd>' + numberText(usage.output) + '</dd></div>',
+        '<div><dt>合計 TOKEN</dt><dd>' + numberText(usage.total) + '</dd></div>',
+        '<div><dt>API 呼叫次數</dt><dd>' + numberText(usage.requests) + '</dd></div>',
+        '<div><dt>玩家傳送訊息</dt><dd>' + numberText(usage.userMessages) + '</dd></div>',
+        '</dl>',
+        '<div class="mol-usage-actions"><button data-action="edit-' + scope + '-usage">修改</button><button class="danger" data-action="reset-' + scope + '-usage">重置</button></div>',
+        '</section>',
+    ].join('');
+}
+
+function openUsageEditDialog(scope) {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    const usage = scope === 'current' ? getChatMeta().usage : getSettings().usageTotals;
+    const title = scope === 'current' ? '修改目前聊天累計' : '修改全部累計';
+    const fields = [
+        ['input', '輸入 TOKEN'],
+        ['output', '回覆 TOKEN'],
+        ['total', '合計 TOKEN'],
+        ['requests', 'API 呼叫次數'],
+        ['userMessages', '玩家傳送訊息'],
+    ];
+    layer.innerHTML = [
+        '<form class="mol-dialog mol-panel-dialog mol-usage-editor"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">EDIT API USAGE</p><h3>' + title + '</h3>',
+        '<p class="mol-dialog-hint">請輸入 0 或正整數。這裡只修改累計值，不會改動「本次」API 回傳紀錄。</p>',
+        '<div class="mol-form-grid">',
+        fields.map(([name, label]) => '<label><span>' + label + '</span><input name="' + name + '" type="number" min="0" step="1" required value="' + Math.trunc(usage[name] || 0) + '"></label>').join(''),
+        '</div><div class="mol-dialog-actions"><button type="button" data-action="usage-stats">取消</button><button type="submit" class="primary">儲存修改</button></div></form>',
+    ].join('');
+    layer.hidden = false;
+    const form = layer.querySelector('form');
+    const handler = async (event) => {
+        event.preventDefault();
+        const values = new FormData(form);
+        const next = { ...usage };
+        for (const [name] of fields) {
+            const value = Number(values.get(name));
+            if (!Number.isSafeInteger(value) || value < 0) {
+                notify('所有累計值都必須是 0 或正整數。', 'warning');
+                form.elements[name]?.focus();
+                return;
+            }
+            next[name] = value;
+        }
+        if (scope === 'current') await persistUsage({ chatUsage: next, globalUsage: null });
+        else await persistUsage({ chatUsage: null, globalUsage: next });
+        notify(title + '已儲存。');
+        openUsagePanel();
+    };
+    form.addEventListener('submit', handler);
+    activeDialogCleanup = () => form.removeEventListener('submit', handler);
+    setTimeout(() => form.elements.input?.focus(), 0);
 }
 
 function openInternalPanel(kind) {
@@ -3657,6 +3722,24 @@ async function handleRootClick(event) {
             break;
         }
         case 'usage-stats': openUsagePanel(); break;
+        case 'edit-current-usage': openUsageEditDialog('current'); break;
+        case 'edit-all-usage': openUsageEditDialog('all'); break;
+        case 'reset-current-usage':
+            openConfirmDialog('重置目前聊天累計', '確定將目前聊天室的 Token、API 呼叫與玩家訊息累計全部歸零？全部累計不受影響。', async () => {
+                await persistUsage({ chatUsage: structuredClone(EMPTY_USAGE), globalUsage: null });
+                notify('目前聊天累計已重置。');
+                openUsagePanel();
+                return false;
+            });
+            break;
+        case 'reset-all-usage':
+            openConfirmDialog('重置全部累計', '確定將全部聊天室累計的 Token、API 呼叫與玩家訊息全部歸零？目前聊天累計不受影響。', async () => {
+                await persistUsage({ chatUsage: null, globalUsage: structuredClone(EMPTY_USAGE) });
+                notify('全部累計已重置。');
+                openUsagePanel();
+                return false;
+            });
+            break;
         case 'format-bold': updateComposerSelection('**', '**'); break;
         case 'format-quote': updateComposerSelection('「', '」'); break;
         case 'quick-reply-manager': openQuickReplyManager(); break;
