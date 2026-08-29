@@ -1,5 +1,5 @@
 const MODULE_NAME = 'molan_gallery';
-const BUILD_VERSION = '1.14.3-ui-polish';
+const BUILD_VERSION = '1.14.1-background-controls';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
@@ -62,8 +62,6 @@ let searchQuery = '';
 let focusMode = false;
 let sidebarOpen = false;
 let streamTimer = 0;
-let searchTimer = 0;
-let chatListRefreshTimer = 0;
 let attachmentName = '';
 let activeDialogCleanup = null;
 let manualGenerationPermitUntil = 0;
@@ -72,13 +70,9 @@ let groupReplyBatchActive = false;
 let groupDraftOverLimit = false;
 const groupReplyCounts = new Map();
 const MAX_GROUP_MEMBERS = 5;
-const CHAT_LIST_CACHE_TTL_MS = 30000;
 let chatEntries = [];
 let chatListLoading = false;
 let chatListRequest = 0;
-let chatListCachedAt = 0;
-let renderedMessageChatId = '';
-let renderedMessageCount = 0;
 let summaryRunning = false;
 let currentGeneration = { type: '', chatId: '', startedAt: 0 };
 let characterCarouselIndex = 0;
@@ -1092,86 +1086,29 @@ async function fetchChatListForEntry(context, type, entity, id) {
     })).filter((row) => row.chatId);
 }
 
-function sortChatEntries(rows) {
-    return rows.sort((a, b) => String(b.lastMes).localeCompare(String(a.lastMes)));
-}
-
-function invalidateChatListCache() {
-    chatListCachedAt = 0;
-}
-
-function mergeChatEntriesForEntity(type, entityId, rows) {
-    const id = String(entityId);
-    chatEntries = sortChatEntries([
-        ...chatEntries.filter((entry) => !(entry.type === type && String(entry.entityId) === id)),
-        ...rows,
-    ]);
-}
-
-async function refreshCurrentEntityChatEntries(context) {
-    const entity = currentEntity(context);
-    if (!entity) return false;
-    const rows = await fetchChatListForEntry(context, entity.type, entity.item, entity.id);
-    mergeChatEntriesForEntity(entity.type, entity.id, rows);
-    chatListCachedAt = Date.now();
-    return true;
-}
-
-async function loadChatEntries({ force = false, scope = 'all' } = {}) {
+async function loadChatEntries() {
     const context = getContext();
     if (!context) return;
-    const cacheFresh = chatEntries.length > 0 && (Date.now() - chatListCachedAt) < CHAT_LIST_CACHE_TTL_MS;
-    if (!force && scope === 'all' && cacheFresh) {
-        renderEntityList();
-        return;
-    }
-
     const requestId = ++chatListRequest;
-    const incremental = scope === 'current' && chatEntries.length > 0;
-    if (!incremental) {
-        chatListLoading = true;
-        renderEntityList();
-    }
+    chatListLoading = true;
+    renderEntityList();
     try {
-        if (incremental || scope === 'current') {
-            const refreshed = await refreshCurrentEntityChatEntries(context);
-            if (requestId !== chatListRequest) return;
-            if (!refreshed) {
-                // 尚無目前實體時退回完整載入
-                const tasks = [
-                    ...context.characters.map((character, id) => fetchChatListForEntry(context, 'character', character, id)),
-                    ...context.groups.map((group) => fetchChatListForEntry(context, 'group', group, group.id)),
-                ];
-                const rows = (await Promise.all(tasks)).flat();
-                if (requestId !== chatListRequest) return;
-                chatEntries = sortChatEntries(rows);
-            }
-        } else {
-            const tasks = [
-                ...context.characters.map((character, id) => fetchChatListForEntry(context, 'character', character, id)),
-                ...context.groups.map((group) => fetchChatListForEntry(context, 'group', group, group.id)),
-            ];
-            const rows = (await Promise.all(tasks)).flat();
-            if (requestId !== chatListRequest) return;
-            chatEntries = sortChatEntries(rows);
-        }
-        if (requestId === chatListRequest) chatListCachedAt = Date.now();
+        const tasks = [
+            ...context.characters.map((character, id) => fetchChatListForEntry(context, 'character', character, id)),
+            ...context.groups.map((group) => fetchChatListForEntry(context, 'group', group, group.id)),
+        ];
+        const rows = (await Promise.all(tasks)).flat();
+        if (requestId !== chatListRequest) return;
+        chatEntries = rows.sort((a, b) => String(b.lastMes).localeCompare(String(a.lastMes)));
     } catch (error) {
         console.error('[墨藍藝廊] 讀取聊天室列表失敗', error);
-        if (requestId === chatListRequest && !incremental) chatEntries = [];
+        if (requestId === chatListRequest) chatEntries = [];
     } finally {
         if (requestId === chatListRequest) {
             chatListLoading = false;
             renderEntityList();
         }
     }
-}
-
-function scheduleChatListRefresh(options = {}) {
-    window.clearTimeout(chatListRefreshTimer);
-    chatListRefreshTimer = window.setTimeout(() => {
-        if (isOpen) loadChatEntries(options);
-    }, 500);
 }
 
 async function ensureGroupChatStartsBlank(context, groupId, chatId) {
@@ -1316,12 +1253,8 @@ function createRoot() {
 
     root.addEventListener('click', handleRootClick);
     root.querySelector('#mol-search-input').addEventListener('input', (event) => {
-        const value = event.currentTarget.value.trim().toLocaleLowerCase();
-        window.clearTimeout(searchTimer);
-        searchTimer = window.setTimeout(() => {
-            searchQuery = value;
-            renderEntityList();
-        }, 150);
+        searchQuery = event.currentTarget.value.trim().toLocaleLowerCase();
+        renderEntityList();
     });
     root.querySelector('#mol-composer').addEventListener('submit', handleComposerSubmit);
     root.querySelector('#mol-draft').addEventListener('keydown', (event) => {
@@ -1648,143 +1581,35 @@ function renderStatusBarArea() {
     slot.hidden = false;
 }
 
-function buildMessageArticleMarkup(message, index, context, chatLength) {
-    const side = message.is_user ? ' user' : (message.is_system ? ' system' : ' character');
-    const isLastCharacter = index === chatLength - 1 && !message.is_user && !message.is_system;
-    return [
-        '<article class="mol-message' + side + '" data-message-id="' + index + '">',
-        '<div class="mol-message-meta"><strong>' + escapeHtml(message.name || (message.is_user ? context.name1 : context.name2)) + '</strong><span>#' + index + '</span></div>',
-        '<div class="mol-message-text">' + formattedMessage(message, index, context) + '</div>',
-        '<div class="mol-message-tools">',
-        '<button data-action="edit-message" data-message-id="' + index + '">編輯</button>',
-        isLastCharacter ? '<button data-action="regenerate">重試</button>' : '',
-        '<button data-action="delete-message" data-message-id="' + index + '">刪除</button>',
-        '</div></article>',
-    ].join('');
-}
-
-function updateMessageSceneHeader(host, context) {
-    const entity = currentEntity(context);
-    let scene = host.querySelector(':scope > .mol-scene');
-    if (!scene) {
-        scene = document.createElement('div');
-        scene.className = 'mol-scene';
-        host.prepend(scene);
-    }
-    scene.innerHTML = '<span>' + escapeHtml(context.chat.length) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p>';
-}
-
-function syncMessageTools(article, message, index, chatLength) {
-    const tools = article.querySelector('.mol-message-tools');
-    if (!tools) return;
-    const isLastCharacter = index === chatLength - 1 && !message.is_user && !message.is_system;
-    const hasRegenerate = Boolean(tools.querySelector('[data-action="regenerate"]'));
-    if (isLastCharacter && !hasRegenerate) {
-        const regenerate = document.createElement('button');
-        regenerate.dataset.action = 'regenerate';
-        regenerate.textContent = '重試';
-        tools.querySelector('[data-action="edit-message"]')?.after(regenerate);
-    } else if (!isLastCharacter && hasRegenerate) {
-        tools.querySelector('[data-action="regenerate"]')?.remove();
-    }
-}
-
-function patchMessageArticle(article, message, index, context, chatLength) {
-    const metaStrong = article.querySelector('.mol-message-meta strong');
-    if (metaStrong) metaStrong.textContent = message.name || (message.is_user ? context.name1 : context.name2) || '';
-    const text = article.querySelector('.mol-message-text');
-    if (!text) return false;
-    text.innerHTML = formattedMessage(message, index, context);
-    decorateChatText(text);
-    syncMessageTools(article, message, index, chatLength);
-    return true;
-}
-
-function canIncrementallyUpdateMessages(host, context) {
-    if (!host || !context?.chat) return false;
-    if (renderedMessageChatId !== String(context.chatId || '')) return false;
-    const articles = host.querySelectorAll(':scope > .mol-message');
-    return articles.length === renderedMessageCount;
-}
-
-function renderMessagesIncremental(host, context, { preserveScroll = false, messageId = null } = {}) {
-    const wasNearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 120;
-    const chat = context.chat;
-    const articles = [...host.querySelectorAll(':scope > .mol-message')];
-
-    if (chat.length < articles.length) return false;
-    if (articles.length && Number(articles[0].dataset.messageId) !== 0) return false;
-    if (articles.length && Number(articles[articles.length - 1].dataset.messageId) !== articles.length - 1) return false;
-
-    updateMessageSceneHeader(host, context);
-
-    for (let index = articles.length; index < chat.length; index += 1) {
-        host.insertAdjacentHTML('beforeend', buildMessageArticleMarkup(chat[index], index, context, chat.length));
-        decorateChatText(host.querySelector(':scope > .mol-message[data-message-id="' + index + '"] .mol-message-text'));
-    }
-
-    const targets = new Set();
-    const patchId = Number(messageId);
-    if (Number.isInteger(patchId) && patchId >= 0 && patchId < chat.length) targets.add(patchId);
-    if (chat.length) targets.add(chat.length - 1);
-    if (articles.length && articles.length < chat.length) targets.add(articles.length - 1);
-
-    for (const index of targets) {
-        if (index >= articles.length) continue; // 剛附加的節點已格式化
-        const article = host.querySelector(':scope > .mol-message[data-message-id="' + index + '"]');
-        if (!article || !chat[index]) return false;
-        if (!patchMessageArticle(article, chat[index], index, context, chat.length)) return false;
-    }
-
-    if (chat.length > 1) {
-        const previous = host.querySelector(':scope > .mol-message[data-message-id="' + (chat.length - 2) + '"]');
-        if (previous) syncMessageTools(previous, chat[chat.length - 2], chat.length - 2, chat.length);
-    }
-
-    renderedMessageChatId = String(context.chatId || '');
-    renderedMessageCount = chat.length;
-    if (!preserveScroll || wasNearBottom) host.scrollTop = host.scrollHeight;
-    return true;
-}
-
-function renderMessagesFull(host, context, { preserveScroll = false } = {}) {
-    const wasNearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 120;
-    if (!context.chat?.length) {
-        host.innerHTML = '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
-        renderedMessageChatId = String(context.chatId || '');
-        renderedMessageCount = 0;
-        return;
-    }
-    const entity = currentEntity(context);
-    const chatLength = context.chat.length;
-    host.innerHTML = [
-        '<div class="mol-scene"><span>' + escapeHtml(chatLength) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p></div>',
-        context.chat.map((message, index) => buildMessageArticleMarkup(message, index, context, chatLength)).join(''),
-    ].join('');
-    host.querySelectorAll('.mol-message-text').forEach(decorateChatText);
-    renderedMessageChatId = String(context.chatId || '');
-    renderedMessageCount = chatLength;
-    if (!preserveScroll || wasNearBottom) host.scrollTop = host.scrollHeight;
-}
-
-function renderMessages({ preserveScroll = false, mode = 'full', messageId = null } = {}) {
+function renderMessages({ preserveScroll = false } = {}) {
     const context = getContext();
     const host = document.getElementById('mol-messages');
     if (!context || !host) return;
-
+    const wasNearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 120;
     if (!context.chat?.length) {
-        renderMessagesFull(host, context, { preserveScroll });
+        host.innerHTML = '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
         return;
     }
-
-    const preferIncremental = mode === 'stream' || mode === 'patch' || mode === 'tail';
-    if (preferIncremental && canIncrementallyUpdateMessages(host, context)) {
-        if (renderMessagesIncremental(host, context, {
-            preserveScroll,
-            messageId: mode === 'patch' ? messageId : null,
-        })) return;
-    }
-    renderMessagesFull(host, context, { preserveScroll });
+    const entity = currentEntity(context);
+    host.innerHTML = [
+        '<div class="mol-scene"><span>' + escapeHtml(context.chat.length) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p></div>',
+        context.chat.map((message, index) => {
+            const side = message.is_user ? ' user' : (message.is_system ? ' system' : ' character');
+            const isLastCharacter = index === context.chat.length - 1 && !message.is_user && !message.is_system;
+            return [
+                '<article class="mol-message' + side + '" data-message-id="' + index + '">',
+                '<div class="mol-message-meta"><strong>' + escapeHtml(message.name || (message.is_user ? context.name1 : context.name2)) + '</strong><span>#' + index + '</span></div>',
+                '<div class="mol-message-text">' + formattedMessage(message, index, context) + '</div>',
+                '<div class="mol-message-tools">',
+                '<button data-action="edit-message" data-message-id="' + index + '">編輯</button>',
+                isLastCharacter ? '<button data-action="regenerate">重試</button>' : '',
+                '<button data-action="delete-message" data-message-id="' + index + '">刪除</button>',
+                '</div></article>',
+            ].join('');
+        }).join(''),
+    ].join('');
+    host.querySelectorAll('.mol-message-text').forEach(decorateChatText);
+    if (!preserveScroll || wasNearBottom) host.scrollTop = host.scrollHeight;
 }
 
 function updateComposerSelection(prefix, suffix) {
@@ -1994,7 +1819,7 @@ async function selectEntity(type, id) {
         applyMemoryInjection();
         sidebarOpen = false;
         refreshAll();
-        loadChatEntries({ scope: 'current' });
+        loadChatEntries();
     } catch (error) {
         console.error('[墨藍藝廊] 切換對話失敗', error);
         notify('無法切換對話，請稍後再試。', 'error');
@@ -2153,7 +1978,7 @@ async function createNativeGroup(name, members, activationStrategy) {
     if (createButton) createButton.hidden = false;
     closeDialog();
     refreshAll();
-    await loadChatEntries({ force: true });
+    await loadChatEntries();
 }
 
 async function openGroupEditorDialog(group = null) {
@@ -2818,7 +2643,7 @@ function openCharacterOverview(index = characterCarouselIndex, flipped = false) 
             for (const file of Array.from(input.files || [])) await importCharacterCardFile(file);
             input.value = '';
             await context.getCharacters();
-            await loadChatEntries({ force: true });
+            await loadChatEntries();
             openCharacterOverview(context.characters.length - 1, false);
         } catch (error) {
             console.error('[墨藍藝廊] 匯入角色卡失敗', error);
@@ -3068,7 +2893,7 @@ async function openCharacterEditor(id = null) {
             const file = new File([JSON.stringify(card)], safeFilename(values.name, 'character') + '.json', { type: 'application/json' });
             await importCharacterCardFile(file, character?.avatar || '');
             await context.getCharacters();
-            await loadChatEntries({ force: true });
+            await loadChatEntries();
             openCharacterOverview();
         } catch (error) {
             console.error('[墨藍藝廊] 儲存角色卡失敗', error);
@@ -3367,7 +3192,7 @@ async function deleteChatEntry({ type, entityId, chatId }) {
         }
     }
     disableGroupAutoMode();
-    await loadChatEntries({ force: true });
+    await loadChatEntries();
     refreshAll();
     notify('聊天室已刪除，並已從對話列表移除。');
 }
@@ -3789,7 +3614,7 @@ async function handleRootClick(event) {
                 const api = await getScriptApi();
                 await api.deleteCharacter(character.avatar, { deleteChats: true });
                 await context.getCharacters();
-                await loadChatEntries({ force: true });
+                await loadChatEntries();
                 notify('角色卡已刪除。');
                 openCharacterOverview();
                 return false;
@@ -4010,7 +3835,7 @@ async function handleRootClick(event) {
                     await context.renameChat(context.chatId, next);
                     notify('對話名稱已更新。');
                     refreshAll();
-                    await loadChatEntries({ force: true });
+                    await loadChatEntries();
                 },
             });
             break;
@@ -4092,7 +3917,7 @@ async function handleRootClick(event) {
 
 function scheduleMessageRefresh() {
     window.clearTimeout(streamTimer);
-    streamTimer = window.setTimeout(() => renderMessages({ preserveScroll: true, mode: 'stream' }), 90);
+    streamTimer = window.setTimeout(() => renderMessages({ preserveScroll: true }), 90);
 }
 
 function subscribe(type, handler) {
@@ -4110,16 +3935,10 @@ function subscribeToSillyTavern() {
         applyMemoryInjection();
         if (isOpen) {
             refreshAll();
-            loadChatEntries({ force: true });
-        } else {
-            invalidateChatListCache();
+            loadChatEntries();
         }
     };
-    const refreshMessages = (mode = 'tail', messageId = null) => {
-        if (!isOpen) return;
-        renderMessages({ mode, messageId, preserveScroll: mode !== 'full' });
-        refreshDetail();
-    };
+    const refreshMessages = () => { if (isOpen) { renderMessages(); refreshDetail(); } };
     subscribe(events.CHAT_CHANGED, refreshWithList);
     subscribe(events.CHAT_CREATED, refreshWithList);
     subscribe(events.CHAT_DELETED, refreshWithList);
@@ -4132,23 +3951,13 @@ function subscribeToSillyTavern() {
     subscribe(events.PERSONA_DELETED, refresh);
     subscribe(events.MESSAGE_SENT, async () => {
         try { await recordUserMessage(); } catch (error) { console.error('[墨藍藝廊] 記錄訊息次數失敗', error); }
-        refreshMessages('tail');
-        scheduleChatListRefresh({ scope: 'current' });
+        refreshMessages();
+        setTimeout(() => { if (isOpen) loadChatEntries(); }, 500);
     });
-    subscribe(events.MESSAGE_RECEIVED, (messageId) => {
-        refreshMessages('tail');
-        setTimeout(() => processStatusBarMessage(messageId), 120);
-        setTimeout(maybeAutoSummarize, 250);
-    });
-    subscribe(events.MESSAGE_EDITED, (messageId) => {
-        refreshMessages('patch', Number(messageId));
-        setTimeout(() => processStatusBarMessage(messageId), 120);
-    });
-    subscribe(events.MESSAGE_DELETED, () => refreshMessages('full'));
-    subscribe(events.MESSAGE_SWIPED, (messageId) => {
-        refreshMessages('patch', Number(messageId));
-        setTimeout(() => processStatusBarMessage(messageId), 120);
-    });
+    subscribe(events.MESSAGE_RECEIVED, (messageId) => { refreshMessages(); setTimeout(() => processStatusBarMessage(messageId), 120); setTimeout(maybeAutoSummarize, 250); });
+    subscribe(events.MESSAGE_EDITED, (messageId) => { refreshMessages(); setTimeout(() => processStatusBarMessage(messageId), 120); });
+    subscribe(events.MESSAGE_DELETED, refreshMessages);
+    subscribe(events.MESSAGE_SWIPED, (messageId) => { refreshMessages(); setTimeout(() => processStatusBarMessage(messageId), 120); });
     subscribe(events.STREAM_TOKEN_RECEIVED, () => { if (isOpen) scheduleMessageRefresh(); });
     subscribe(events.GROUP_WRAPPER_STARTED, () => {
         groupReplyBatchActive = true;
@@ -4170,10 +3979,7 @@ function subscribeToSillyTavern() {
         manualGenerationPermitUntil = 0;
         blockedGenerationUntil = 0;
         isBusy = false;
-        if (isOpen) {
-            refreshAll();
-            loadChatEntries({ scope: 'current' });
-        }
+        if (isOpen) { refreshAll(); loadChatEntries(); }
     });
     subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
         const liveContext = getContext();
@@ -4216,7 +4022,7 @@ function subscribeToSillyTavern() {
         disableGroupAutoMode();
         renderComposer();
     });
-    subscribe(events.GENERATION_ENDED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries({ scope: 'current' }); } setTimeout(maybeAutoSummarize, 250); });
+    subscribe(events.GENERATION_ENDED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); });
     subscribe(events.GENERATION_STOPPED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) renderComposer(); });
     subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
     subscribe(events.MAIN_API_CHANGED, refresh);
@@ -4241,7 +4047,7 @@ function handleFileChange(event) {
 }
 
 function initialize() {
-    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜介面美化與效能優化已啟用');
+    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜圓角介面與中英文字體設定已啟用');
     createRoot();
     installViewportSync();
     installLauncher();
@@ -4276,8 +4082,6 @@ export function onDisable() {
     context?.setExtensionPrompt?.('molan_gallery_statusbar', '', 0, 0, false, 0);
     context?.setExtensionPrompt?.('molan_gallery_group_chat_rules', '', 0, 0, false, 0);
     window.clearTimeout(streamTimer);
-    window.clearTimeout(searchTimer);
-    window.clearTimeout(chatListRefreshTimer);
     for (const { type, handler } of subscribedEvents.splice(0)) {
         if (type) context?.eventSource?.off?.(type, handler);
     }
@@ -4290,10 +4094,6 @@ export function onDisable() {
     document.getElementById(SETTINGS_ID)?.remove();
     document.body.classList.remove('mol-gallery-open');
     restoreUsageCapture();
-    chatEntries = [];
-    chatListCachedAt = 0;
-    renderedMessageChatId = '';
-    renderedMessageCount = 0;
     initialized = false;
     isOpen = false;
 }
