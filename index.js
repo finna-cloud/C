@@ -1,5 +1,5 @@
 const MODULE_NAME = 'molan_gallery';
-const BUILD_VERSION = '1.11.3-statusbar-bottom';
+const BUILD_VERSION = '1.12.0-quick-replies';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     interfaceFontSize: 14,
     messageFontSize: 14,
     usageTotals: structuredClone(EMPTY_USAGE),
+    quickReplies: [],
 });
 
 let initialized = false;
@@ -86,9 +87,19 @@ function getSettings() {
         }
     }
     context.extensionSettings[MODULE_NAME].usageTotals = normalizeUsage(context.extensionSettings[MODULE_NAME].usageTotals);
+    context.extensionSettings[MODULE_NAME].quickReplies = normalizeQuickReplies(context.extensionSettings[MODULE_NAME].quickReplies);
     context.extensionSettings[MODULE_NAME].interfaceFontSize = clampFontSize(context.extensionSettings[MODULE_NAME].interfaceFontSize, 11, 22, DEFAULT_SETTINGS.interfaceFontSize);
     context.extensionSettings[MODULE_NAME].messageFontSize = clampFontSize(context.extensionSettings[MODULE_NAME].messageFontSize, 12, 32, DEFAULT_SETTINGS.messageFontSize);
     return context.extensionSettings[MODULE_NAME];
+}
+
+function normalizeQuickReplies(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 100).map((item, index) => ({
+        id: String(item?.id || 'quick-reply-' + (index + 1)).slice(0, 100),
+        label: String(item?.label || item?.title || '').trim().slice(0, 60),
+        content: String(item?.content || item?.text || '').slice(0, 10000),
+    })).filter((item) => item.label && item.content);
 }
 
 function clampFontSize(value, min, max, fallback) {
@@ -1099,6 +1110,11 @@ function createRoot() {
         '  <div id="mol-messages" class="mol-messages" aria-live="polite"></div>',
         '  <div id="mol-tavern-helper-statusbar-slot" class="mol-tavern-helper-statusbar-slot" aria-label="酒館助手互動狀態欄" hidden></div>',
         '  <div class="mol-composer-wrap">',
+        '    <div class="mol-composer-shortcuts" aria-label="訊息輸入快捷工具">',
+        '      <div class="mol-format-shortcuts"><button type="button" data-action="format-bold" title="以 ** 包住選取文字">**</button><button type="button" data-action="format-quote" title="以中文引號包住選取文字">「」</button></div>',
+        '      <label class="mol-quick-reply-picker"><span>快速回覆</span><select id="mol-quick-reply-select" aria-label="快速回覆"><option value="">選擇內容…</option></select></label>',
+        '      <button type="button" class="mol-quick-reply-manage" data-action="quick-reply-manager" title="新增、修改或刪除快速回覆"><i class="fa-solid fa-pen"></i><span>管理</span></button>',
+        '    </div>',
         '    <form id="mol-composer" class="mol-composer">',
         '      <button type="button" data-action="attach" class="mol-add-button" title="加入附件"><i class="fa-solid fa-plus"></i></button>',
         '      <textarea id="mol-draft" rows="1" placeholder="寫下你的回覆…" aria-label="輸入訊息"></textarea>',
@@ -1139,6 +1155,12 @@ function createRoot() {
             event.currentTarget.form?.requestSubmit();
         }
     });
+    root.querySelector('#mol-quick-reply-select').addEventListener('change', (event) => {
+        const reply = getSettings().quickReplies.find((item) => item.id === event.currentTarget.value);
+        if (reply) insertComposerText(reply.content);
+        event.currentTarget.value = '';
+    });
+    renderQuickReplyControls();
 }
 
 function installLauncher() {
@@ -1426,6 +1448,97 @@ function renderMessages({ preserveScroll = false } = {}) {
     if (!preserveScroll || wasNearBottom) host.scrollTop = host.scrollHeight;
 }
 
+function updateComposerSelection(prefix, suffix) {
+    const textarea = document.getElementById('mol-draft');
+    if (!(textarea instanceof HTMLTextAreaElement)) return;
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    const selected = textarea.value.slice(start, end);
+    textarea.setRangeText(prefix + selected + suffix, start, end, 'end');
+    const selectionStart = start + prefix.length;
+    const selectionEnd = selectionStart + selected.length;
+    textarea.setSelectionRange(selectionStart, selectionEnd);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+}
+
+function insertComposerText(content) {
+    const textarea = document.getElementById('mol-draft');
+    if (!(textarea instanceof HTMLTextAreaElement)) return;
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    textarea.setRangeText(String(content || ''), start, end, 'end');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+}
+
+function renderQuickReplyControls() {
+    const select = document.getElementById('mol-quick-reply-select');
+    if (!(select instanceof HTMLSelectElement)) return;
+    const selected = select.value;
+    const replies = getSettings().quickReplies;
+    select.innerHTML = '<option value="">' + (replies.length ? '選擇內容…' : '尚無快速回覆') + '</option>' + replies.map((reply) => '<option value="' + escapeHtml(reply.id) + '">' + escapeHtml(reply.label) + '</option>').join('');
+    select.disabled = !replies.length;
+    if (replies.some((reply) => reply.id === selected)) select.value = selected;
+}
+
+function openQuickReplyManager() {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    const replies = getSettings().quickReplies;
+    layer.innerHTML = [
+        '<div class="mol-dialog mol-panel-dialog mol-wide-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">QUICK REPLIES</p><h3>快速回覆</h3>',
+        '<div class="mol-panel-toolbar"><button class="primary" data-action="new-quick-reply"><i class="fa-solid fa-plus"></i> 新增快速回覆</button></div>',
+        '<p class="mol-dialog-copy">選擇快速回覆時只會將內容插入游標位置，不會立即送出；插入後仍可繼續修改。</p>',
+        replies.length ? '<div class="mol-quick-reply-list">' + replies.map((reply, index) => [
+            '<article><span class="mol-quick-reply-number">' + String(index + 1).padStart(2, '0') + '</span><div><strong>' + escapeHtml(reply.label) + '</strong><small>' + escapeHtml(truncate(reply.content, 120)) + '</small></div>',
+            '<button data-action="edit-quick-reply" data-quick-reply-id="' + escapeHtml(reply.id) + '">修改</button><button class="danger" data-action="delete-quick-reply" data-quick-reply-id="' + escapeHtml(reply.id) + '">刪除</button></article>',
+        ].join('')).join('') + '</div>' : '<div class="mol-quick-reply-empty"><strong>尚無快速回覆</strong><p>新增後即可從訊息框上方的下拉選單插入內容。</p></div>',
+        '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div></div>',
+    ].join('');
+    layer.hidden = false;
+}
+
+function openQuickReplyEditor(id = '') {
+    closeDialog();
+    const layer = document.getElementById('mol-dialog');
+    if (!layer) return;
+    const reply = getSettings().quickReplies.find((item) => item.id === id);
+    layer.innerHTML = [
+        '<form class="mol-dialog mol-panel-dialog mol-quick-reply-editor"><button type="button" class="mol-dialog-close" data-action="close-dialog">×</button><p class="mol-eyebrow">' + (reply ? 'EDIT QUICK REPLY' : 'NEW QUICK REPLY') + '</p><h3>' + (reply ? '修改快速回覆' : '新增快速回覆') + '</h3>',
+        '<label><span>選單名稱</span><input name="label" type="text" maxlength="60" required value="' + escapeHtml(reply?.label || '') + '" placeholder="例如：稍等一下"></label>',
+        '<label><span>回覆內容</span><textarea name="content" rows="8" maxlength="10000" required placeholder="輸入要插入訊息框的完整內容">' + escapeHtml(reply?.content || '') + '</textarea></label>',
+        '<p class="mol-dialog-hint">儲存後會出現在「快速回覆」下拉選單；選取時不會自動傳送。</p>',
+        '<div class="mol-dialog-actions"><button type="button" data-action="quick-reply-manager">取消</button><button type="submit" class="primary">儲存</button></div></form>',
+    ].join('');
+    layer.hidden = false;
+    const form = layer.querySelector('form');
+    const handler = (event) => {
+        event.preventDefault();
+        const values = new FormData(form);
+        const label = String(values.get('label') || '').trim();
+        const content = String(values.get('content') || '');
+        if (!label || !content.trim()) {
+            notify('請輸入選單名稱與回覆內容。', 'warning');
+            return;
+        }
+        const settings = getSettings();
+        if (reply) {
+            const index = settings.quickReplies.findIndex((item) => item.id === reply.id);
+            if (index >= 0) settings.quickReplies[index] = { ...settings.quickReplies[index], label, content };
+        } else {
+            settings.quickReplies.push({ id: 'quick-reply-' + Date.now().toString(36), label, content });
+        }
+        getContext().saveSettingsDebounced();
+        renderQuickReplyControls();
+        notify(reply ? '快速回覆已修改。' : '快速回覆已新增。');
+        openQuickReplyManager();
+    };
+    form.addEventListener('submit', handler);
+    activeDialogCleanup = () => form.removeEventListener('submit', handler);
+}
+
 function renderComposer() {
     const root = document.getElementById(ROOT_ID);
     const button = root?.querySelector('.mol-send-button');
@@ -1437,6 +1550,7 @@ function renderComposer() {
     if (stream) stream.textContent = isBusy ? 'Generating…' : 'Ready';
     const attachment = document.getElementById('mol-attachment');
     if (attachment) attachment.textContent = attachmentName ? '附件：' + attachmentName : 'Enter 傳送 · Shift + Enter 換行';
+    renderQuickReplyControls();
 }
 
 function renderDetail() {
@@ -3253,6 +3367,26 @@ async function handleRootClick(event) {
             break;
         }
         case 'usage-stats': openUsagePanel(); break;
+        case 'format-bold': updateComposerSelection('**', '**'); break;
+        case 'format-quote': updateComposerSelection('「', '」'); break;
+        case 'quick-reply-manager': openQuickReplyManager(); break;
+        case 'new-quick-reply': openQuickReplyEditor(); break;
+        case 'edit-quick-reply': openQuickReplyEditor(actionElement.dataset.quickReplyId || ''); break;
+        case 'delete-quick-reply': {
+            const id = actionElement.dataset.quickReplyId || '';
+            const reply = getSettings().quickReplies.find((item) => item.id === id);
+            if (!reply) break;
+            openConfirmDialog('刪除快速回覆', '確定刪除「' + reply.label + '」？', () => {
+                const settings = getSettings();
+                settings.quickReplies = settings.quickReplies.filter((item) => item.id !== id);
+                context.saveSettingsDebounced();
+                renderQuickReplyControls();
+                notify('快速回覆已刪除。');
+                openQuickReplyManager();
+                return false;
+            });
+            break;
+        }
         case 'memory-summary': openMemorySummaryPanel(); break;
         case 'statusbar-manager': openStatusBarManager(); break;
         case 'sync-tavern-helper-statusbar': {
