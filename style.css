@@ -2965,3 +2965,141 @@ body.mol-gallery-open {
         grid-template-columns: 1fr;
     }
 }
+
+/* v1.14.0 — configurable chat bubbles, text colors and local backgrounds */
+#molan-gallery-root {
+    --mol-message-opacity: .28;
+    --mol-narrative-color: #292824;
+    --mol-dialogue-color: #204bd9;
+    --mol-chat-background-color: var(--mol-light);
+    --mol-chat-background-image: none;
+    --mol-chat-background-opacity: .32;
+}
+
+.mol-conversation {
+    isolation: isolate;
+    background: var(--mol-chat-background-color);
+}
+
+.mol-conversation::before {
+    z-index: 0;
+}
+
+.mol-conversation::after {
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    pointer-events: none;
+    background-image: var(--mol-chat-background-image);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: cover;
+    content: "";
+    opacity: var(--mol-chat-background-opacity);
+}
+
+.mol-conversation > * {
+    position: relative;
+    z-index: 1;
+}
+
+.mol-message {
+    background: rgb(255 255 255 / var(--mol-message-opacity));
+}
+
+.mol-message.user {
+    background: rgb(227 232 250 / var(--mol-message-opacity));
+}
+
+#molan-gallery-root.mol-bubbles-borderless .mol-message,
+#molan-gallery-root.mol-bubbles-borderless .mol-message.user,
+#molan-gallery-root.mol-bubbles-borderless .mol-message.system {
+    border-color: transparent;
+    border-left-color: transparent;
+    box-shadow: none;
+}
+
+.mol-narrative-text {
+    color: var(--mol-narrative-color);
+}
+
+.mol-dialogue-text {
+    color: var(--mol-dialogue-color);
+}
+
+.mol-settings-heading {
+    display: grid;
+    gap: 4px;
+    margin-top: 8px;
+    padding: 14px 2px 6px;
+    border-bottom: 1px solid var(--mol-ink);
+}
+
+.mol-settings-heading strong {
+    font-size: calc(13px * var(--mol-ui-scale));
+}
+
+.mol-settings-heading small {
+    line-height: 1.55;
+}
+
+.mol-settings-list .mol-color-setting {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.mol-settings-list .mol-color-setting input[type="color"] {
+    width: 52px;
+    height: 40px;
+    padding: 4px;
+    border: 1px solid var(--mol-line);
+    border-radius: 12px;
+    background: var(--mol-light);
+    cursor: pointer;
+}
+
+.mol-background-actions {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+    padding: 13px;
+    border: 1px solid var(--mol-line);
+    border-radius: var(--mol-card-radius);
+    background: var(--mol-paper);
+}
+
+.mol-upload-button,
+.mol-background-actions button {
+    display: inline-flex;
+    min-height: 38px;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 12px;
+    border: 1px solid var(--mol-line);
+    border-radius: var(--mol-control-radius);
+    color: var(--mol-ink);
+    background: var(--mol-light);
+    cursor: pointer;
+}
+
+.mol-upload-button input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+}
+
+.mol-background-actions small {
+    color: var(--mol-muted);
+}
+
+@media (max-width: 700px) {
+    .mol-background-actions {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .mol-background-actions small {
+        grid-column: 1 / -1;
+    }
+}

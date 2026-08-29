@@ -1,5 +1,5 @@
 const MODULE_NAME = 'molan_gallery';
-const BUILD_VERSION = '1.13.0-rounded-typography';
+const BUILD_VERSION = '1.14.0-chat-appearance';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
@@ -42,6 +42,14 @@ const DEFAULT_SETTINGS = Object.freeze({
     messageFontSize: 14,
     chineseFont: 'sans',
     englishFont: 'modern',
+    bubbleStyle: 'framed',
+    bubbleOpacity: 28,
+    narrativeColor: '#292824',
+    dialogueColor: '#204bd9',
+    chatBackgroundMode: 'default',
+    chatBackgroundColor: '#faf8f2',
+    chatBackgroundImage: '',
+    chatBackgroundOpacity: 32,
     usageTotals: structuredClone(EMPTY_USAGE),
     quickReplies: [],
 });
@@ -109,6 +117,20 @@ function getSettings() {
     context.extensionSettings[MODULE_NAME].englishFont = Object.hasOwn(ENGLISH_FONT_OPTIONS, context.extensionSettings[MODULE_NAME].englishFont)
         ? context.extensionSettings[MODULE_NAME].englishFont
         : DEFAULT_SETTINGS.englishFont;
+    context.extensionSettings[MODULE_NAME].bubbleStyle = ['framed', 'borderless'].includes(context.extensionSettings[MODULE_NAME].bubbleStyle)
+        ? context.extensionSettings[MODULE_NAME].bubbleStyle
+        : DEFAULT_SETTINGS.bubbleStyle;
+    context.extensionSettings[MODULE_NAME].bubbleOpacity = clampNumber(context.extensionSettings[MODULE_NAME].bubbleOpacity, 0, 100, DEFAULT_SETTINGS.bubbleOpacity);
+    context.extensionSettings[MODULE_NAME].narrativeColor = normalizeHexColor(context.extensionSettings[MODULE_NAME].narrativeColor, DEFAULT_SETTINGS.narrativeColor);
+    context.extensionSettings[MODULE_NAME].dialogueColor = normalizeHexColor(context.extensionSettings[MODULE_NAME].dialogueColor, DEFAULT_SETTINGS.dialogueColor);
+    context.extensionSettings[MODULE_NAME].chatBackgroundMode = ['default', 'color', 'image'].includes(context.extensionSettings[MODULE_NAME].chatBackgroundMode)
+        ? context.extensionSettings[MODULE_NAME].chatBackgroundMode
+        : DEFAULT_SETTINGS.chatBackgroundMode;
+    context.extensionSettings[MODULE_NAME].chatBackgroundColor = normalizeHexColor(context.extensionSettings[MODULE_NAME].chatBackgroundColor, DEFAULT_SETTINGS.chatBackgroundColor);
+    context.extensionSettings[MODULE_NAME].chatBackgroundImage = String(context.extensionSettings[MODULE_NAME].chatBackgroundImage || '').startsWith('data:image/')
+        ? context.extensionSettings[MODULE_NAME].chatBackgroundImage
+        : '';
+    context.extensionSettings[MODULE_NAME].chatBackgroundOpacity = clampNumber(context.extensionSettings[MODULE_NAME].chatBackgroundOpacity, 5, 100, DEFAULT_SETTINGS.chatBackgroundOpacity);
     return context.extensionSettings[MODULE_NAME];
 }
 
@@ -124,6 +146,16 @@ function normalizeQuickReplies(value) {
 function clampFontSize(value, min, max, fallback) {
     const size = Number(value);
     return Math.max(min, Math.min(max, Number.isFinite(size) ? Math.round(size) : fallback));
+}
+
+function clampNumber(value, min, max, fallback) {
+    const number = Number(value);
+    return Math.max(min, Math.min(max, Number.isFinite(number) ? Math.round(number) : fallback));
+}
+
+function normalizeHexColor(value, fallback) {
+    const color = String(value || '').trim();
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
 }
 
 function renderFontOptions(options, selected) {
@@ -147,6 +179,57 @@ function applyTypographySettings() {
     root.style.setProperty('--mol-dialog-layer-mobile-padding', Math.round(10 * scale) + 'px');
     root.style.setProperty('--mol-dialog-shadow', Math.round(10 * scale) + 'px');
     syncDialogViewport();
+}
+
+function applyChatAppearanceSettings() {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return;
+    const settings = getSettings();
+    const conversation = root.querySelector('.mol-conversation');
+    root.classList.toggle('mol-bubbles-borderless', settings.bubbleStyle === 'borderless');
+    root.style.setProperty('--mol-message-opacity', String(settings.bubbleOpacity / 100));
+    root.style.setProperty('--mol-narrative-color', settings.narrativeColor);
+    root.style.setProperty('--mol-dialogue-color', settings.dialogueColor);
+    root.style.setProperty('--mol-chat-background-color', settings.chatBackgroundMode === 'default' ? 'var(--mol-light)' : settings.chatBackgroundColor);
+    root.style.setProperty('--mol-chat-background-opacity', String(settings.chatBackgroundOpacity / 100));
+    const image = settings.chatBackgroundMode === 'image' && settings.chatBackgroundImage
+        ? 'url("' + settings.chatBackgroundImage + '")'
+        : 'none';
+    root.style.setProperty('--mol-chat-background-image', image);
+    conversation?.classList.toggle('has-custom-background', settings.chatBackgroundMode !== 'default');
+}
+
+async function optimizeChatBackground(file) {
+    if (!file?.type?.startsWith('image/')) throw new Error('請選擇圖片檔。');
+    if (file.size > 15 * 1024 * 1024) throw new Error('背景圖片不可超過 15 MB。');
+    const objectUrl = URL.createObjectURL(file);
+    try {
+        const image = new Image();
+        image.src = objectUrl;
+        await image.decode();
+        let width = image.naturalWidth;
+        let height = image.naturalHeight;
+        const maximum = 1920;
+        const ratio = Math.min(1, maximum / Math.max(width, height));
+        width = Math.max(1, Math.round(width * ratio));
+        height = Math.max(1, Math.round(height * ratio));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('瀏覽器無法處理這張圖片。');
+        context.drawImage(image, 0, 0, width, height);
+        let quality = .84;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        while (dataUrl.length > 1_500_000 && quality > .54) {
+            quality -= .1;
+            dataUrl = canvas.toDataURL('image/jpeg', quality);
+        }
+        if (dataUrl.length > 1_800_000) throw new Error('圖片壓縮後仍過大，請改用尺寸較小的圖片。');
+        return dataUrl;
+    } finally {
+        URL.revokeObjectURL(objectUrl);
+    }
 }
 
 function syncDialogViewport() {
@@ -1285,6 +1368,7 @@ function setOpen(value) {
         applyMemoryInjection();
         root.classList.toggle('compact-messages', Boolean(getSettings().compactMessages));
         applyTypographySettings();
+        applyChatAppearanceSettings();
         startTavernHelperStatusBarBridge();
         refreshAll();
         loadChatEntries();
@@ -1382,6 +1466,46 @@ function formattedMessage(message, index, context) {
     } catch {
         return escapeHtml(text).replaceAll('\n', '<br>');
     }
+}
+
+function decorateChatText(scope) {
+    if (!scope) return;
+    const nodes = [];
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            const parent = node.parentElement;
+            if (!node.nodeValue || !parent || parent.closest('pre, code, button, a, .mol-dialogue-text, .mol-narrative-text')) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+        },
+    });
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    const dialoguePattern = /(「[^」]*」|『[^』]*』|“[^”]*”|"[^"\n]+")/g;
+    nodes.forEach((node) => {
+        const text = node.nodeValue || '';
+        if (!text.trim()) return;
+        const fragment = document.createDocumentFragment();
+        let cursor = 0;
+        for (const match of text.matchAll(dialoguePattern)) {
+            if (match.index > cursor) {
+                const narrative = document.createElement('span');
+                narrative.className = 'mol-narrative-text';
+                narrative.textContent = text.slice(cursor, match.index);
+                fragment.append(narrative);
+            }
+            const dialogue = document.createElement('span');
+            dialogue.className = 'mol-dialogue-text';
+            dialogue.textContent = match[0];
+            fragment.append(dialogue);
+            cursor = match.index + match[0].length;
+        }
+        if (cursor < text.length) {
+            const narrative = document.createElement('span');
+            narrative.className = 'mol-narrative-text';
+            narrative.textContent = text.slice(cursor);
+            fragment.append(narrative);
+        }
+        node.replaceWith(fragment);
+    });
 }
 
 function activeStatusBar(meta = getChatMeta()) {
@@ -1484,6 +1608,7 @@ function renderMessages({ preserveScroll = false } = {}) {
             ].join('');
         }).join(''),
     ].join('');
+    host.querySelectorAll('.mol-message-text').forEach(decorateChatText);
     if (!preserveScroll || wasNearBottom) host.scrollTop = host.scrollHeight;
 }
 
@@ -3148,9 +3273,19 @@ function openInternalPanel(kind) {
             '<label class="mol-range-setting"><span><strong>聊天室訊息字體</strong><small>只調整對話正文，不影響介面</small></span><span><input name="messageFontSize" type="range" min="12" max="32" step="1" value="' + settings.messageFontSize + '"><output>' + settings.messageFontSize + ' px</output></span></label>',
             '<label class="mol-font-select-setting"><span><strong>中文字體</strong><small>套用於中文介面與對話內容</small></span><select name="chineseFont">' + renderFontOptions(CHINESE_FONT_OPTIONS, settings.chineseFont) + '</select></label>',
             '<label class="mol-font-select-setting"><span><strong>英文字體</strong><small>套用於英文、數字與標點</small></span><select name="englishFont">' + renderFontOptions(ENGLISH_FONT_OPTIONS, settings.englishFont) + '</select></label>',
+            '<div class="mol-settings-heading"><strong>聊天室訊息外觀</strong><small>對話引號內文字會自動套用對話色，其餘文字套用劇情色。</small></div>',
+            '<label class="mol-font-select-setting"><span><strong>訊息泡泡樣式</strong><small>保留半透明底色，切換是否顯示外框</small></span><select name="bubbleStyle"><option value="framed"' + (settings.bubbleStyle === 'framed' ? ' selected' : '') + '>有框</option><option value="borderless"' + (settings.bubbleStyle === 'borderless' ? ' selected' : '') + '>無框</option></select></label>',
+            '<label class="mol-range-setting"><span><strong>訊息背景透明度</strong><small>0% 完全透明，100% 完全不透明</small></span><span><input name="bubbleOpacity" type="range" min="0" max="100" step="1" value="' + settings.bubbleOpacity + '"><output>' + settings.bubbleOpacity + '%</output></span></label>',
+            '<label class="mol-color-setting"><span><strong>劇情字體顏色</strong><small>套用於旁白、動作與場景敘述</small></span><input name="narrativeColor" type="color" value="' + settings.narrativeColor + '"></label>',
+            '<label class="mol-color-setting"><span><strong>對話字體顏色</strong><small>套用於「」、『』、“”與英文雙引號內文字</small></span><input name="dialogueColor" type="color" value="' + settings.dialogueColor + '"></label>',
+            '<div class="mol-settings-heading"><strong>聊天室背景</strong><small>圖片只保存在目前 SillyTavern 設定，不需外部網址。</small></div>',
+            '<label class="mol-font-select-setting"><span><strong>背景模式</strong><small>使用預設、純色或自訂圖片</small></span><select name="chatBackgroundMode"><option value="default"' + (settings.chatBackgroundMode === 'default' ? ' selected' : '') + '>預設背景</option><option value="color"' + (settings.chatBackgroundMode === 'color' ? ' selected' : '') + '>自訂顏色</option><option value="image"' + (settings.chatBackgroundMode === 'image' ? ' selected' : '') + '>自訂圖片</option></select></label>',
+            '<label class="mol-color-setting"><span><strong>背景顏色</strong><small>純色模式及圖片載入前的底色</small></span><input name="chatBackgroundColor" type="color" value="' + settings.chatBackgroundColor + '"></label>',
+            '<label class="mol-range-setting"><span><strong>背景圖片顯示強度</strong><small>降低可讓訊息文字更清楚</small></span><span><input name="chatBackgroundOpacity" type="range" min="5" max="100" step="1" value="' + settings.chatBackgroundOpacity + '"><output>' + settings.chatBackgroundOpacity + '%</output></span></label>',
+            '<div class="mol-background-actions"><label class="mol-upload-button">選擇背景圖片<input name="chatBackgroundImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label><button type="button" name="clearChatBackground"' + (settings.chatBackgroundImage ? '' : ' disabled') + '>移除圖片</button><small name="chatBackgroundStatus">' + (settings.chatBackgroundImage ? '已載入自訂背景圖片' : '尚未載入背景圖片') + '</small></div>',
             '</div>',
             '<p class="mol-dialog-hint">快捷鍵：Ctrl/Cmd + Shift + M</p>',
-            '<div class="mol-dialog-actions"><button class="primary" data-action="close-dialog">完成</button></div>',
+            '<div class="mol-dialog-actions"><button type="button" name="resetChatAppearance">恢復聊天室外觀預設</button><button class="primary" data-action="close-dialog">完成</button></div>',
         ].join('');
     }
     layer.innerHTML = '<div class="mol-dialog mol-panel-dialog"><button type="button" class="mol-dialog-close" data-action="close-dialog" title="關閉">×</button><p class="mol-eyebrow">' + eyebrow + '</p><h3>' + title + '</h3>' + content + '</div>';
@@ -3168,7 +3303,19 @@ function openInternalPanel(kind) {
         const messageFont = layer.querySelector('input[name="messageFontSize"]');
         const chineseFont = layer.querySelector('select[name="chineseFont"]');
         const englishFont = layer.querySelector('select[name="englishFont"]');
+        const bubbleStyle = layer.querySelector('select[name="bubbleStyle"]');
+        const bubbleOpacity = layer.querySelector('input[name="bubbleOpacity"]');
+        const narrativeColor = layer.querySelector('input[name="narrativeColor"]');
+        const dialogueColor = layer.querySelector('input[name="dialogueColor"]');
+        const chatBackgroundMode = layer.querySelector('select[name="chatBackgroundMode"]');
+        const chatBackgroundColor = layer.querySelector('input[name="chatBackgroundColor"]');
+        const chatBackgroundOpacity = layer.querySelector('input[name="chatBackgroundOpacity"]');
+        const chatBackgroundImage = layer.querySelector('input[name="chatBackgroundImage"]');
+        const clearChatBackground = layer.querySelector('button[name="clearChatBackground"]');
+        const resetChatAppearance = layer.querySelector('button[name="resetChatAppearance"]');
+        const chatBackgroundStatus = layer.querySelector('[name="chatBackgroundStatus"]');
         const save = () => context.saveSettingsDebounced();
+        const applyAppearance = () => { applyChatAppearanceSettings(); save(); };
         const onAutoOpen = () => { settings.autoOpen = autoOpen.checked; save(); };
         const onCompact = () => {
             settings.compactMessages = compact.checked;
@@ -3197,12 +3344,88 @@ function openInternalPanel(kind) {
             applyTypographySettings();
             save();
         };
+        const onBubbleStyle = () => { settings.bubbleStyle = bubbleStyle.value === 'borderless' ? 'borderless' : 'framed'; applyAppearance(); };
+        const onBubbleOpacity = () => {
+            settings.bubbleOpacity = clampNumber(bubbleOpacity.value, 0, 100, DEFAULT_SETTINGS.bubbleOpacity);
+            bubbleOpacity.nextElementSibling.value = settings.bubbleOpacity + '%';
+            applyAppearance();
+        };
+        const onNarrativeColor = () => { settings.narrativeColor = normalizeHexColor(narrativeColor.value, DEFAULT_SETTINGS.narrativeColor); applyAppearance(); };
+        const onDialogueColor = () => { settings.dialogueColor = normalizeHexColor(dialogueColor.value, DEFAULT_SETTINGS.dialogueColor); applyAppearance(); };
+        const onBackgroundMode = () => { settings.chatBackgroundMode = ['default', 'color', 'image'].includes(chatBackgroundMode.value) ? chatBackgroundMode.value : 'default'; applyAppearance(); };
+        const onBackgroundColor = () => { settings.chatBackgroundColor = normalizeHexColor(chatBackgroundColor.value, DEFAULT_SETTINGS.chatBackgroundColor); applyAppearance(); };
+        const onBackgroundOpacity = () => {
+            settings.chatBackgroundOpacity = clampNumber(chatBackgroundOpacity.value, 5, 100, DEFAULT_SETTINGS.chatBackgroundOpacity);
+            chatBackgroundOpacity.nextElementSibling.value = settings.chatBackgroundOpacity + '%';
+            applyAppearance();
+        };
+        const onBackgroundImage = async () => {
+            const file = chatBackgroundImage.files?.[0];
+            if (!file) return;
+            try {
+                chatBackgroundStatus.textContent = '正在處理圖片…';
+                settings.chatBackgroundImage = await optimizeChatBackground(file);
+                settings.chatBackgroundMode = 'image';
+                chatBackgroundMode.value = 'image';
+                clearChatBackground.disabled = false;
+                chatBackgroundStatus.textContent = '已載入並壓縮自訂背景圖片';
+                applyAppearance();
+            } catch (error) {
+                chatBackgroundStatus.textContent = error?.message || '背景圖片載入失敗';
+                notify(chatBackgroundStatus.textContent, 'error');
+            } finally {
+                chatBackgroundImage.value = '';
+            }
+        };
+        const onClearBackground = () => {
+            settings.chatBackgroundImage = '';
+            settings.chatBackgroundMode = 'default';
+            chatBackgroundMode.value = 'default';
+            clearChatBackground.disabled = true;
+            chatBackgroundStatus.textContent = '尚未載入背景圖片';
+            applyAppearance();
+        };
+        const onResetAppearance = () => {
+            Object.assign(settings, {
+                bubbleStyle: DEFAULT_SETTINGS.bubbleStyle,
+                bubbleOpacity: DEFAULT_SETTINGS.bubbleOpacity,
+                narrativeColor: DEFAULT_SETTINGS.narrativeColor,
+                dialogueColor: DEFAULT_SETTINGS.dialogueColor,
+                chatBackgroundMode: DEFAULT_SETTINGS.chatBackgroundMode,
+                chatBackgroundColor: DEFAULT_SETTINGS.chatBackgroundColor,
+                chatBackgroundImage: DEFAULT_SETTINGS.chatBackgroundImage,
+                chatBackgroundOpacity: DEFAULT_SETTINGS.chatBackgroundOpacity,
+            });
+            bubbleStyle.value = settings.bubbleStyle;
+            bubbleOpacity.value = String(settings.bubbleOpacity);
+            bubbleOpacity.nextElementSibling.value = settings.bubbleOpacity + '%';
+            narrativeColor.value = settings.narrativeColor;
+            dialogueColor.value = settings.dialogueColor;
+            chatBackgroundMode.value = settings.chatBackgroundMode;
+            chatBackgroundColor.value = settings.chatBackgroundColor;
+            chatBackgroundOpacity.value = String(settings.chatBackgroundOpacity);
+            chatBackgroundOpacity.nextElementSibling.value = settings.chatBackgroundOpacity + '%';
+            clearChatBackground.disabled = true;
+            chatBackgroundStatus.textContent = '尚未載入背景圖片';
+            applyAppearance();
+            notify('聊天室外觀已恢復預設。');
+        };
         autoOpen.addEventListener('change', onAutoOpen);
         compact.addEventListener('change', onCompact);
         interfaceFont.addEventListener('input', onInterfaceFont);
         messageFont.addEventListener('input', onMessageFont);
         chineseFont.addEventListener('change', onChineseFont);
         englishFont.addEventListener('change', onEnglishFont);
+        bubbleStyle.addEventListener('change', onBubbleStyle);
+        bubbleOpacity.addEventListener('input', onBubbleOpacity);
+        narrativeColor.addEventListener('input', onNarrativeColor);
+        dialogueColor.addEventListener('input', onDialogueColor);
+        chatBackgroundMode.addEventListener('change', onBackgroundMode);
+        chatBackgroundColor.addEventListener('input', onBackgroundColor);
+        chatBackgroundOpacity.addEventListener('input', onBackgroundOpacity);
+        chatBackgroundImage.addEventListener('change', onBackgroundImage);
+        clearChatBackground.addEventListener('click', onClearBackground);
+        resetChatAppearance.addEventListener('click', onResetAppearance);
         activeDialogCleanup = () => {
             autoOpen.removeEventListener('change', onAutoOpen);
             compact.removeEventListener('change', onCompact);
@@ -3210,6 +3433,16 @@ function openInternalPanel(kind) {
             messageFont.removeEventListener('input', onMessageFont);
             chineseFont.removeEventListener('change', onChineseFont);
             englishFont.removeEventListener('change', onEnglishFont);
+            bubbleStyle.removeEventListener('change', onBubbleStyle);
+            bubbleOpacity.removeEventListener('input', onBubbleOpacity);
+            narrativeColor.removeEventListener('input', onNarrativeColor);
+            dialogueColor.removeEventListener('input', onDialogueColor);
+            chatBackgroundMode.removeEventListener('change', onBackgroundMode);
+            chatBackgroundColor.removeEventListener('input', onBackgroundColor);
+            chatBackgroundOpacity.removeEventListener('input', onBackgroundOpacity);
+            chatBackgroundImage.removeEventListener('change', onBackgroundImage);
+            clearChatBackground.removeEventListener('click', onClearBackground);
+            resetChatAppearance.removeEventListener('click', onResetAppearance);
         };
     }
 }
