@@ -1,8 +1,9 @@
 const MODULE_NAME = 'molan_gallery';
-const BUILD_VERSION = '1.15.0-usage-management';
+const BUILD_VERSION = '1.16.0-moon-generation-indicator';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
+const MOON_PHASE_CHAIN_URL = new URL('./assets/moon-phase-chain.png', import.meta.url).href;
 const GENERATION_ENDPOINTS = new Set([
     '/api/backends/chat-completions/generate',
     '/api/backends/text-completions/generate',
@@ -62,6 +63,7 @@ let searchQuery = '';
 let focusMode = false;
 let sidebarOpen = false;
 let streamTimer = 0;
+let generationIndicatorHideTimer = 0;
 let attachmentName = '';
 let activeDialogCleanup = null;
 let manualGenerationPermitUntil = 0;
@@ -1218,7 +1220,13 @@ function createRoot() {
         '    </div>',
         '  </header>',
         '  <div class="mol-chapter"><span>LIVE CHAT</span><i></i><span id="mol-chat-name">尚未開啟對話</span></div>',
-        '  <div id="mol-messages" class="mol-messages" aria-live="polite"></div>',
+        '  <div id="mol-messages" class="mol-messages" aria-live="polite">',
+        '    <div id="mol-message-list" class="mol-message-list"></div>',
+        '    <div id="mol-generation-indicator" class="mol-generation-indicator" role="status" aria-live="polite" hidden>',
+        '      <div class="mol-generation-moonchain" aria-hidden="true"><img src="' + escapeHtml(MOON_PHASE_CHAIN_URL) + '" alt=""></div>',
+        '      <span class="mol-visually-hidden">正在生成完整劇情</span>',
+        '    </div>',
+        '  </div>',
         '  <div id="mol-tavern-helper-statusbar-slot" class="mol-tavern-helper-statusbar-slot" aria-label="酒館助手互動狀態欄" hidden></div>',
         '  <div class="mol-composer-wrap">',
         '    <div class="mol-composer-shortcuts" aria-label="訊息輸入快捷工具">',
@@ -1587,14 +1595,16 @@ function renderStatusBarArea() {
 function renderMessages({ preserveScroll = false } = {}) {
     const context = getContext();
     const host = document.getElementById('mol-messages');
-    if (!context || !host) return;
+    const list = document.getElementById('mol-message-list');
+    if (!context || !host || !list) return;
     const wasNearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 120;
     if (!context.chat?.length) {
-        host.innerHTML = '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
+        list.innerHTML = '<div class="mol-scene"><span>NEW CHAT</span><strong>尚未有訊息</strong><p>從下方輸入框開始這段對話。</p></div>';
+        if (!preserveScroll || wasNearBottom) host.scrollTop = host.scrollHeight;
         return;
     }
     const entity = currentEntity(context);
-    host.innerHTML = [
+    list.innerHTML = [
         '<div class="mol-scene"><span>' + escapeHtml(context.chat.length) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p></div>',
         context.chat.map((message, index) => {
             const side = message.is_user ? ' user' : (message.is_system ? ' system' : ' character');
@@ -1611,8 +1621,28 @@ function renderMessages({ preserveScroll = false } = {}) {
             ].join('');
         }).join(''),
     ].join('');
-    host.querySelectorAll('.mol-message-text').forEach(decorateChatText);
+    list.querySelectorAll('.mol-message-text').forEach(decorateChatText);
     if (!preserveScroll || wasNearBottom) host.scrollTop = host.scrollHeight;
+}
+
+function setGenerationIndicator(visible) {
+    const indicator = document.getElementById('mol-generation-indicator');
+    const host = document.getElementById('mol-messages');
+    if (!indicator) return;
+    window.clearTimeout(generationIndicatorHideTimer);
+    generationIndicatorHideTimer = 0;
+    if (visible) {
+        indicator.hidden = false;
+        requestAnimationFrame(() => {
+            if (isBusy && !indicator.hidden) indicator.classList.add('is-visible');
+        });
+        if (host) requestAnimationFrame(() => { host.scrollTop = host.scrollHeight; });
+        return;
+    }
+    indicator.classList.remove('is-visible');
+    generationIndicatorHideTimer = window.setTimeout(() => {
+        if (!isBusy) indicator.hidden = true;
+    }, 280);
 }
 
 function updateComposerSelection(prefix, suffix) {
@@ -1715,6 +1745,7 @@ function renderComposer() {
         button.innerHTML = isBusy ? '<i class="fa-solid fa-stop"></i>' : '<i class="fa-solid fa-paper-plane"></i>';
     }
     if (stream) stream.textContent = isBusy ? 'Generating…' : 'Ready';
+    setGenerationIndicator(isBusy);
     const attachment = document.getElementById('mol-attachment');
     if (attachment) attachment.textContent = attachmentName ? '附件：' + attachmentName : 'Enter 傳送 · Shift + Enter 換行';
     renderQuickReplyControls();
@@ -3581,6 +3612,7 @@ async function handleComposerSubmit(event) {
     permitManualGeneration(entity.type === 'group' ? 180000 : 60000);
     draft.value = '';
     attachmentName = '';
+    isBusy = true;
     renderComposer();
     nativeSend.click();
 }
@@ -4105,7 +4137,14 @@ function subscribeToSillyTavern() {
         disableGroupAutoMode();
         renderComposer();
     });
-    subscribe(events.GENERATION_ENDED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; blockedGenerationUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) { refreshAll(); loadChatEntries(); } setTimeout(maybeAutoSummarize, 250); });
+    subscribe(events.GENERATION_ENDED, () => {
+        if (!groupReplyBatchActive) manualGenerationPermitUntil = 0;
+        blockedGenerationUntil = 0;
+        isBusy = groupReplyBatchActive;
+        disableGroupAutoMode();
+        if (isOpen) { refreshAll(); loadChatEntries(); }
+        setTimeout(maybeAutoSummarize, 250);
+    });
     subscribe(events.GENERATION_STOPPED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) renderComposer(); });
     subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
     subscribe(events.MAIN_API_CHANGED, refresh);

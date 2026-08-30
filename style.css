@@ -567,6 +567,94 @@ body.mol-gallery-open {
     scroll-behavior: smooth;
 }
 
+.mol-message-list { min-width: 0; }
+
+.mol-generation-indicator {
+    display: grid;
+    width: min(360px, 76%);
+    min-height: 92px;
+    place-items: center;
+    margin: -8px auto 24px;
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(.985);
+    transition: opacity .28s ease, transform .28s cubic-bezier(.2, .8, .2, 1);
+    pointer-events: none;
+    contain: layout paint;
+}
+
+.mol-generation-indicator[hidden] { display: none !important; }
+
+.mol-generation-indicator.is-visible {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+}
+
+.mol-generation-moonchain {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 3 / 1;
+    filter: drop-shadow(0 6px 12px rgba(32, 75, 217, .16));
+    transform: translateZ(0);
+    animation: mol-moonchain-float 4.2s cubic-bezier(.45, 0, .55, 1) infinite;
+    will-change: transform, filter;
+    backface-visibility: hidden;
+}
+
+.mol-generation-moonchain img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+.mol-generation-moonchain::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 24%, rgba(255, 255, 255, .08) 38%, rgba(111, 164, 255, .9) 49%, rgba(255, 255, 255, .55) 54%, transparent 69%);
+    background-position: 135% 50%;
+    background-size: 240% 100%;
+    content: "";
+    opacity: .85;
+    -webkit-mask: url("./assets/moon-phase-chain.png") center / contain no-repeat;
+    mask: url("./assets/moon-phase-chain.png") center / contain no-repeat;
+    animation: mol-moonchain-shimmer 2.8s linear infinite;
+    will-change: background-position, opacity;
+}
+
+.mol-visually-hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+@keyframes mol-moonchain-float {
+    0%, 100% { transform: translate3d(-2px, 1px, 0) scale(.995); filter: drop-shadow(0 5px 10px rgba(32, 75, 217, .14)); }
+    50% { transform: translate3d(2px, -3px, 0) scale(1.012); filter: drop-shadow(0 8px 16px rgba(32, 75, 217, .28)); }
+}
+
+@keyframes mol-moonchain-shimmer {
+    0% { background-position: 145% 50%; opacity: .4; }
+    38%, 62% { opacity: .95; }
+    100% { background-position: -55% 50%; opacity: .4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .mol-generation-moonchain { animation: none; }
+    .mol-generation-moonchain::after { animation: mol-moonchain-breathe 2.4s ease-in-out infinite; }
+}
+
+@keyframes mol-moonchain-breathe {
+    0%, 100% { opacity: .25; }
+    50% { opacity: .8; }
+}
+
 .mol-tavern-helper-statusbar-slot {
     z-index: 3;
     min-width: 0;
