@@ -571,8 +571,9 @@ body.mol-gallery-open {
 
 .mol-generation-indicator {
     display: grid;
-    width: min(360px, 76%);
-    min-height: 92px;
+    width: 3cm;
+    height: 1cm;
+    min-height: 1cm;
     place-items: center;
     margin: -8px auto 24px;
     opacity: 0;
@@ -591,8 +592,8 @@ body.mol-gallery-open {
 
 .mol-generation-moonchain {
     position: relative;
-    width: 100%;
-    aspect-ratio: 3 / 1;
+    width: 3cm;
+    height: 1cm;
     filter: drop-shadow(0 6px 12px rgba(32, 75, 217, .16));
     transform: translateZ(0);
     animation: mol-moonchain-float 4.2s cubic-bezier(.45, 0, .55, 1) infinite;
@@ -635,8 +636,8 @@ body.mol-gallery-open {
 }
 
 @keyframes mol-moonchain-float {
-    0%, 100% { transform: translate3d(-2px, 1px, 0) scale(.995); filter: drop-shadow(0 5px 10px rgba(32, 75, 217, .14)); }
-    50% { transform: translate3d(2px, -3px, 0) scale(1.012); filter: drop-shadow(0 8px 16px rgba(32, 75, 217, .28)); }
+    0%, 100% { transform: translate3d(-2px, 1px, 0); filter: drop-shadow(0 5px 10px rgba(32, 75, 217, .14)); }
+    50% { transform: translate3d(2px, -3px, 0); filter: drop-shadow(0 8px 16px rgba(32, 75, 217, .28)); }
 }
 
 @keyframes mol-moonchain-shimmer {

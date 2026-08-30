@@ -1,5 +1,5 @@
 const MODULE_NAME = 'molan_gallery';
-const BUILD_VERSION = '1.16.0-moon-generation-indicator';
+const BUILD_VERSION = '1.16.1-complete-response-reveal';
 const ROOT_ID = 'molan-gallery-root';
 const LAUNCHER_ID = 'molan-gallery-launcher';
 const SETTINGS_ID = 'molan-gallery-settings';
@@ -64,6 +64,8 @@ let focusMode = false;
 let sidebarOpen = false;
 let streamTimer = 0;
 let generationIndicatorHideTimer = 0;
+let generationVisibleMessageCount = null;
+let generationMaskChatId = '';
 let attachmentName = '';
 let activeDialogCleanup = null;
 let manualGenerationPermitUntil = 0;
@@ -1026,6 +1028,7 @@ function enterInspectionMode({ stopActive = false, guardMilliseconds = 8000 } = 
     groupDraftOverLimit = false;
     groupReplyCounts.clear();
     isBusy = false;
+    clearGenerationMessageMask();
     disableGroupAutoMode();
     if (stopActive) getContext()?.stopGeneration?.();
     if (isOpen) renderComposer();
@@ -1604,11 +1607,17 @@ function renderMessages({ preserveScroll = false } = {}) {
         return;
     }
     const entity = currentEntity(context);
+    const maskActive = generationVisibleMessageCount !== null
+        && generationMaskChatId === String(context.chatId || '')
+        && (isBusy || groupReplyBatchActive);
+    const visibleMessages = context.chat
+        .map((message, index) => ({ message, index }))
+        .filter(({ index }) => !maskActive || index < generationVisibleMessageCount);
     list.innerHTML = [
-        '<div class="mol-scene"><span>' + escapeHtml(context.chat.length) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p></div>',
-        context.chat.map((message, index) => {
+        '<div class="mol-scene"><span>' + escapeHtml(visibleMessages.length) + ' MESSAGES</span><strong>' + escapeHtml(context.chatId || '未命名對話') + '</strong><p>' + escapeHtml(entity?.item?.name || 'SillyTavern') + '</p></div>',
+        visibleMessages.map(({ message, index }, visibleIndex) => {
             const side = message.is_user ? ' user' : (message.is_system ? ' system' : ' character');
-            const isLastCharacter = index === context.chat.length - 1 && !message.is_user && !message.is_system;
+            const isLastCharacter = visibleIndex === visibleMessages.length - 1 && !message.is_user && !message.is_system && !maskActive;
             return [
                 '<article class="mol-message' + side + '" data-message-id="' + index + '">',
                 '<div class="mol-message-meta"><strong>' + escapeHtml(message.name || (message.is_user ? context.name1 : context.name2)) + '</strong><span>#' + index + '</span></div>',
@@ -1623,6 +1632,22 @@ function renderMessages({ preserveScroll = false } = {}) {
     ].join('');
     list.querySelectorAll('.mol-message-text').forEach(decorateChatText);
     if (!preserveScroll || wasNearBottom) host.scrollTop = host.scrollHeight;
+}
+
+function beginGenerationMessageMask({ includePendingUser = false, replaceLastMessage = false, preserveExisting = false } = {}) {
+    const context = getContext();
+    if (!context?.chat) return;
+    const chatId = String(context.chatId || '');
+    if (preserveExisting && generationVisibleMessageCount !== null && generationMaskChatId === chatId) return;
+    let visibleCount = context.chat.length + (includePendingUser ? 1 : 0);
+    if (replaceLastMessage && context.chat.length) visibleCount = context.chat.length - 1;
+    generationVisibleMessageCount = Math.max(0, visibleCount);
+    generationMaskChatId = chatId;
+}
+
+function clearGenerationMessageMask() {
+    generationVisibleMessageCount = null;
+    generationMaskChatId = '';
 }
 
 function setGenerationIndicator(visible) {
@@ -3559,11 +3584,13 @@ async function regenerate() {
     if (isBusy) return;
     try {
         permitManualGeneration();
+        beginGenerationMessageMask({ replaceLastMessage: true });
         isBusy = true;
         renderComposer();
         await getContext().generate('regenerate');
     } finally {
         isBusy = false;
+        clearGenerationMessageMask();
         refreshAll();
     }
 }
@@ -3577,11 +3604,13 @@ async function continueGeneration() {
     if (isBusy) return;
     try {
         permitManualGeneration();
+        beginGenerationMessageMask({ replaceLastMessage: true });
         isBusy = true;
         renderComposer();
         await context.generate('continue');
     } finally {
         isBusy = false;
+        clearGenerationMessageMask();
         refreshAll();
     }
 }
@@ -3612,6 +3641,7 @@ async function handleComposerSubmit(event) {
     permitManualGeneration(entity.type === 'group' ? 180000 : 60000);
     draft.value = '';
     attachmentName = '';
+    beginGenerationMessageMask({ includePendingUser: true });
     isBusy = true;
     renderComposer();
     nativeSend.click();
@@ -4078,6 +4108,7 @@ function subscribeToSillyTavern() {
         groupReplyBatchActive = true;
         groupDraftOverLimit = false;
         groupReplyCounts.clear();
+        beginGenerationMessageMask({ preserveExisting: true });
         permitManualGeneration(180000);
     });
     subscribe(events.GROUP_MEMBER_DRAFTED, (characterId) => {
@@ -4094,6 +4125,7 @@ function subscribeToSillyTavern() {
         manualGenerationPermitUntil = 0;
         blockedGenerationUntil = 0;
         isBusy = false;
+        clearGenerationMessageMask();
         if (isOpen) { refreshAll(); loadChatEntries(); }
     });
     subscribe(events.GENERATION_STARTED, (type, options, dryRun) => {
@@ -4110,12 +4142,14 @@ function subscribeToSillyTavern() {
             blockedGenerationUntil = Date.now() + 10000;
             manualGenerationPermitUntil = 0;
             isBusy = false;
+            clearGenerationMessageMask();
             disableGroupAutoMode();
             renderComposer();
             // SillyTavern 在 GENERATION_STARTED 之後才建立 AbortController；延後才能真正中止。
             setTimeout(() => {
                 if (Date.now() < blockedGenerationUntil) context.stopGeneration();
                 isBusy = false;
+                clearGenerationMessageMask();
                 if (isOpen) renderComposer();
             }, 0);
             notify(options?.automatic_trigger ? '已關閉群組自動回覆；目前只開啟聊天室供檢視。' : '已阻止未經使用者操作的自動回覆。');
@@ -4123,10 +4157,15 @@ function subscribeToSillyTavern() {
         }
         if (!isOpen) {
             isBusy = false;
+            clearGenerationMessageMask();
             return;
         }
         if (!groupReplyBatchActive) manualGenerationPermitUntil = 0;
         blockedGenerationUntil = 0;
+        beginGenerationMessageMask({
+            replaceLastMessage: String(type || 'normal') !== 'normal' || Boolean(liveContext?.chat?.at?.(-1) && !liveContext.chat.at(-1).is_user),
+            preserveExisting: true,
+        });
         isBusy = true;
         if (isOpen) renderComposer();
     });
@@ -4134,6 +4173,7 @@ function subscribeToSillyTavern() {
         if (dryRun || !isOpen || Date.now() >= blockedGenerationUntil) return;
         context.stopGeneration();
         isBusy = false;
+        clearGenerationMessageMask();
         disableGroupAutoMode();
         renderComposer();
     });
@@ -4141,11 +4181,12 @@ function subscribeToSillyTavern() {
         if (!groupReplyBatchActive) manualGenerationPermitUntil = 0;
         blockedGenerationUntil = 0;
         isBusy = groupReplyBatchActive;
+        if (!groupReplyBatchActive) clearGenerationMessageMask();
         disableGroupAutoMode();
         if (isOpen) { refreshAll(); loadChatEntries(); }
         setTimeout(maybeAutoSummarize, 250);
     });
-    subscribe(events.GENERATION_STOPPED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; isBusy = false; disableGroupAutoMode(); if (isOpen) renderComposer(); });
+    subscribe(events.GENERATION_STOPPED, () => { if (!groupReplyBatchActive) manualGenerationPermitUntil = 0; isBusy = false; clearGenerationMessageMask(); disableGroupAutoMode(); if (isOpen) refreshAll(); });
     subscribe(events.CHATCOMPLETION_MODEL_CHANGED, refresh);
     subscribe(events.MAIN_API_CHANGED, refresh);
     subscribe(events.WORLDINFO_UPDATED, refresh);
@@ -4169,7 +4210,7 @@ function handleFileChange(event) {
 }
 
 function initialize() {
-    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜圓角介面與中英文字體設定已啟用');
+    console.info('[墨藍藝廊] 已載入版本 ' + BUILD_VERSION + '｜生成完成後一次顯示完整訊息');
     createRoot();
     installViewportSync();
     installLauncher();
